@@ -15,7 +15,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core import settings
-from models import (ItemType, KnowledgeEvent, LinkCreate, OperationType, User)
+from models import (
+    ItemType,
+    KnowledgeEvent,
+    LinkCreate,
+    OperationType,
+    StatusType,
+    User,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +63,27 @@ async def get_active_item_by_name(db: AsyncSession, user: User, item_name: str) 
         subquery.c.operation != OperationType.DELETED,
         subquery.c.item_name == item_name,
         subquery.c.item_type == ItemType.FILE
+    )
+    result = await db.execute(query)
+    return result.first()
+
+
+async def get_active_item_by_uuid(db: AsyncSession, user: User, item_uuid: uuid.UUID) -> Optional[KnowledgeEvent]:
+    """Возвращает последнее активное событие по UUID (если оно не удалено)."""
+    subquery = select(
+        KnowledgeEvent,
+        func.row_number().over(
+            partition_by=KnowledgeEvent.item_uuid,
+            order_by=KnowledgeEvent.operation_time.desc(),
+        ).label("rn"),
+    ).where(
+        KnowledgeEvent.tenant_id == user.tenant_id,
+        KnowledgeEvent.item_uuid == item_uuid,
+    ).subquery()
+
+    query = select(subquery).where(
+        subquery.c.rn == 1,
+        subquery.c.operation != OperationType.DELETED,
     )
     result = await db.execute(query)
     return result.first()
@@ -103,7 +131,7 @@ async def create_file_event(
             operation=OperationType.DELETED,
             operation_time=existing_event.operation_time, item_name=filename,
             item_type=ItemType.FILE, content=existing_event.content,
-            size=existing_event.size, status=existing_event.status,
+            size=existing_event.size, status=StatusType.NEW,
             s3_path=existing_event.s3_path
         )
         db.add(delete_event)
@@ -131,7 +159,7 @@ async def create_file_event(
         operation=OperationType.CREATED,
         item_name=filename, item_type=ItemType.FILE,
         content=f"s3://{settings.s3_bucket_name}/{s3_object_key}",
-        size=file_size, status="new", s3_path=s3_object_key
+        size=file_size, status=StatusType.NEW, s3_path=s3_object_key
     )
     db.add(create_event)
 
@@ -150,7 +178,7 @@ async def create_link_event(db: AsyncSession, user: User, link_data: LinkCreate)
         item_name=link_data.name,
         item_type=ItemType.LINK,
         content=link_data.url,
-        status="new"
+        status=StatusType.NEW
     )
     db.add(new_event)
     await db.commit()
@@ -192,7 +220,7 @@ async def mark_item_as_deleted(db: AsyncSession, user: User, item_uuid: uuid.UUI
         operation=OperationType.DELETED,
         item_name=latest_event.item_name,
         item_type=latest_event.item_type,
-        status=latest_event.status,
+        status=StatusType.NEW,
         content=latest_event.content,
         size=latest_event.size,
         s3_path=latest_event.s3_path

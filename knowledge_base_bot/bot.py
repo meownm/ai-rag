@@ -73,10 +73,10 @@ class KnowledgeBaseAPI:
         self._base_url = base_url
         self._username = username
         self._password = password
-        
+
         self._auth_client = httpx.AsyncClient(timeout=10.0)
         self._api_client = httpx.AsyncClient(timeout=30.0, auth=BearerAuth(self))
-        
+
         self._token: Optional[str] = None
         self._token_expires: Optional[datetime] = None
 
@@ -119,6 +119,16 @@ class KnowledgeBaseAPI:
         r = await self._api_client.get(f"{self._base_url}/items/search", params={"q": query})
         r.raise_for_status(); return [ItemResponse.model_validate(item) for item in r.json()]
 
+    async def get_item(self, item_uuid: str) -> Optional[ItemResponse]:
+        try:
+            r = await self._api_client.get(f"{self._base_url}/items/{item_uuid}")
+            r.raise_for_status()
+            return ItemResponse.model_validate(r.json())
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
     async def add_file(self, file_name: str, file_content: bytes) -> ItemResponse:
         files = {'file': (file_name, BytesIO(file_content), 'application/octet-stream')}
         r = await self._api_client.post(f"{self._base_url}/files", files=files)
@@ -135,6 +145,10 @@ class KnowledgeBaseAPI:
     async def set_status(self, item_uuid: str, new_status: str):
         r = await self._api_client.patch(f"{self._base_url}/items/{item_uuid}/status", json={"status": new_status})
         r.raise_for_status()
+
+    async def close(self):
+        await self._auth_client.aclose()
+        await self._api_client.aclose()
 
 kb_api = KnowledgeBaseAPI(settings.kb_api_base_url, settings.kb_api_username, settings.kb_api_password)
 
@@ -187,9 +201,8 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     action, *data = query.data.split(':')
     item_uuid = data[0] if data else None
 
-    item_list = await kb_api.search_items(item_uuid) if item_uuid else []
-    item = item_list[0] if item_list else None
-    
+    item = await kb_api.get_item(item_uuid) if item_uuid else None
+
     if not item and action not in ["delete_execute"]:
         await query.edit_message_text(text="Элемент был удален или изменен.", reply_markup=None)
         return
@@ -205,8 +218,12 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Да, удалить", callback_data=f"delete_execute:{item_uuid}"), InlineKeyboardButton("❌ Отмена", callback_data=f"view:{item_uuid}")]])
         await query.edit_message_text(text="Вы уверены?", reply_markup=keyboard)
     elif action == "delete_execute":
-        await kb_api.delete_item(item_uuid)
-        await query.edit_message_text(text="✅ Элемент удален.", reply_markup=None)
+        item = item or await kb_api.get_item(item_uuid)
+        if not item:
+            await query.edit_message_text(text="Элемент уже удалён или не найден.", reply_markup=None)
+        else:
+            await kb_api.delete_item(item_uuid)
+            await query.edit_message_text(text="✅ Элемент удален.", reply_markup=None)
     elif action == "change_status_menu":
         buttons = [[InlineKeyboardButton(s.capitalize(), callback_data=f"set_status:{item_uuid}:{s}")] for s in StatusType.ALL]
         buttons.append([InlineKeyboardButton("‹‹ Назад", callback_data=f"view:{item_uuid}")])
@@ -271,6 +288,11 @@ async def post_init(application: Application):
     await application.bot.set_my_commands(commands)
     logger.info("Bot commands menu has been set.")
 
+async def post_shutdown(application: Application):
+    """Закрывает HTTP-клиенты после остановки бота."""
+    await kb_api.close()
+    logger.info("HTTP clients closed.")
+
 # ===============================================================================
 # ТОЧКА ВХОДА
 # ===============================================================================
@@ -279,6 +301,7 @@ def main():
         Application.builder()
         .token(settings.telegram_bot_token)
         .post_init(post_init)
+        .post_shutdown(post_shutdown)
         .connect_timeout(10.0)
         .read_timeout(30.0)
         .build()
