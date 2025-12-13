@@ -260,6 +260,13 @@ async def search_items(q: str, db: AsyncSession = Depends(get_db), current_user:
     query = select(subquery).where(subquery.c.rn == 1, subquery.c.operation != OperationType.DELETED, subquery.c.item_name.ilike(f"%{q}%"))
     result = await db.execute(query); return result.all()
 
+@app.get("/items/{item_uuid}", response_model=ItemResponse, tags=["Items"])
+async def get_item(item_uuid: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    latest_event = await get_latest_event_for_item(db, item_uuid, current_user.tenant_id)
+    if not latest_event or latest_event.operation == OperationType.DELETED:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return latest_event
+
 @app.get("/files/{item_uuid}/download", response_model=FileDownloadResponse, tags=["Items"])
 async def get_file_download_url(item_uuid: uuid.UUID, db: AsyncSession = Depends(get_db), s3_client=Depends(get_s3_client), current_user: User = Depends(get_current_user)):
     latest_event = await get_latest_event_for_item(db, item_uuid, current_user.tenant_id)
@@ -274,7 +281,7 @@ async def delete_item(item_uuid: uuid.UUID, db: AsyncSession = Depends(get_db), 
     if latest_event.item_type == ItemType.FILE:
         try: await s3_client.delete_object(Bucket=settings.s3_bucket_name, Key=latest_event.content)
         except ClientError: logger.error("Failed to delete object from S3, but proceeding with DB event", exc_info=True)
-    delete_event = KnowledgeEvent(item_uuid=item_uuid, tenant_id=current_user.tenant_id, user_id=current_user.id, operation=OperationType.DELETED, item_name=latest_event.item_name, item_type=latest_event.item_type, status=latest_event.status)
+    delete_event = KnowledgeEvent(item_uuid=item_uuid, tenant_id=current_user.tenant_id, user_id=current_user.id, operation=OperationType.DELETED, item_name=latest_event.item_name, item_type=latest_event.item_type, status=StatusType.NEW)
     db.add(delete_event); await db.commit(); return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 @app.patch("/items/{item_uuid}/status", response_model=ItemResponse, tags=["Items"])

@@ -3,16 +3,25 @@ import requests
 import json
 import psycopg2.extras
 from collections import defaultdict
+from datetime import datetime
 from typing import List, Dict, Literal, Optional, Tuple
 
 from sentence_transformers import SentenceTransformer, CrossEncoder
 
 from schemas import InternalChunk, Filters
 from clients import PostgreSQLClient, Neo4jClient
+from llm_logging import log_llm_request
 import re
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+
+
+def _build_ollama_embedding_endpoint(api_base: Optional[str]) -> str:
+    base = api_base or OLLAMA_URL
+    if "/api/" in base:
+        base = base.split("/api/", 1)[0]
+    return f"{base.rstrip('/')}/api/embeddings"
 
 # --- Вспомогательные функции ---
 
@@ -50,6 +59,26 @@ def _build_filter_clause(filters: Optional[Filters], doc_ids: Optional[List[str]
     
     return "WHERE " + " AND ".join(clauses), params
 
+
+def _build_indexing_guard(filter_clause: str, params: list, embedding_version: Optional[int]) -> Tuple[str, list]:
+    """
+    Гарантирует консистентность с пайплайном индексации: используем только
+    готовые эмбеддинги актуальной версии и успешно завершенные этапы обогащения.
+    """
+    readiness_conditions = [
+        "c.embedding IS NOT NULL",
+        "coalesce(c.enrichment_status->'embedding_generation'->>'status','') = 'completed'",
+    ]
+
+    if embedding_version is not None:
+        readiness_conditions.append("c.embedding_version = %s")
+        params.append(embedding_version)
+
+    where_suffix = " AND ".join(readiness_conditions)
+    if filter_clause:
+        return filter_clause + " AND " + where_suffix, params
+    return "WHERE " + where_suffix, params
+
 def _rerank_results(reranker_model: Optional[CrossEncoder], query: str, chunks: List[InternalChunk], top_k: int) -> List[InternalChunk]:
     if not chunks:
         return []
@@ -64,6 +93,61 @@ def _rerank_results(reranker_model: Optional[CrossEncoder], query: str, chunks: 
         chunk.score = float(score)
         
     return sorted(chunks, key=lambda c: c.score, reverse=True)[:top_k]
+
+
+def _encode_query(
+    query: str,
+    embedding_model: SentenceTransformer,
+    embedding_config: Dict,
+) -> Optional[List[float]]:
+    mode = embedding_config.get("mode", "local") if embedding_config else "local"
+    generator = embedding_config.get("generator") if embedding_config else None
+
+    if generator == "ollama":
+        api_base = embedding_config.get("api_base")
+        model_name = embedding_config.get("model_name") or OLLAMA_MODEL
+        endpoint = _build_ollama_embedding_endpoint(api_base)
+        try:
+            response = requests.post(
+                endpoint,
+                json={"model": model_name, "prompt": query},
+                timeout=60,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            embedding = payload.get("embedding")
+            return embedding
+        except Exception as e:  # noqa: BLE001
+            print(f"Failed to encode query via Ollama embeddings: {e}")
+            return None
+
+    if mode == "api" or generator == "service":
+        api_base = embedding_config.get("api_base") or os.getenv("EMBEDDING_API_BASE")
+        model_name = embedding_config.get("model_name")
+        if not api_base or not model_name:
+            print("Embedding API base or model_name is not configured; skipping dense retrieval.")
+            return None
+
+        try:
+            response = requests.post(
+                f"{api_base}/embeddings",
+                json={"model": model_name, "input": [query]},
+                timeout=60,
+            )
+            response.raise_for_status()
+            data = response.json().get("data", [])
+            if not data:
+                return None
+            return data[0].get("embedding")
+        except Exception as e:  # noqa: BLE001
+            print(f"Failed to encode query via embedding API: {e}")
+            return None
+
+    try:
+        return embedding_model.encode(query).tolist()
+    except Exception as e:  # noqa: BLE001
+        print(f"Failed to encode query locally: {e}")
+        return None
 
 def _find_and_reconstruct_table(db_client: PostgreSQLClient, chunk: InternalChunk) -> str:
     sql = "SELECT text, type FROM chunks WHERE doc_id = %s AND section = %s AND (type LIKE 'table%%' OR block_type LIKE 'table%%') ORDER BY chunk_id;"
@@ -108,26 +192,38 @@ def _post_process_chunks(db_client: PostgreSQLClient, chunks: List[InternalChunk
 
 # --- Основные методы поиска (Retrieval) ---
 
-def retrieve_dense(db_client: PostgreSQLClient, embedding_model: SentenceTransformer, query: str, top_k: int, filters: Optional[Filters], allowed_doc_ids: Optional[List[str]]) -> List[InternalChunk]:
-    query_embedding = embedding_model.encode(query)
+def retrieve_dense(
+    db_client: PostgreSQLClient,
+    embedding_model: SentenceTransformer,
+    query: str,
+    top_k: int,
+    filters: Optional[Filters],
+    allowed_doc_ids: Optional[List[str]],
+    embedding_config: Optional[Dict],
+) -> List[InternalChunk]:
+    query_embedding = _encode_query(query, embedding_model, embedding_config or {})
+    if not query_embedding:
+        return []
+
     filter_clause, params = _build_filter_clause(filters, allowed_doc_ids)
-    
+    filter_clause, params = _build_indexing_guard(filter_clause, params, (embedding_config or {}).get("version"))
+
     sql_query = f"""
         SELECT c.doc_id, c.chunk_id, c.text, d.filename, c.metadata, c.type, c.block_type,
                1 - (c.embedding::vector <=> %s::vector) AS score
         FROM chunks c JOIN documents d ON c.doc_id = d.doc_id
         {filter_clause} ORDER BY score DESC LIMIT %s;
     """
-    
+
     results = []
     with db_client.get_cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        cur.execute(sql_query, params + [query_embedding.tolist(), top_k])
+        cur.execute(sql_query, params + [query_embedding, top_k])
         rows = cur.fetchall()
         for row in rows:
             results.append(InternalChunk(source_id=-1, **row))
     return results
 
-def retrieve_bm25(db_client: PostgreSQLClient, query: str, top_k: int, filters: Optional[Filters], allowed_doc_ids: Optional[List[str]]) -> List[InternalChunk]:
+def retrieve_bm25(db_client: PostgreSQLClient, query: str, top_k: int, filters: Optional[Filters], allowed_doc_ids: Optional[List[str]], embedding_version: Optional[int]) -> List[InternalChunk]:
     # --- НОВАЯ ЛОГИКА ОЧИСТКИ ---
     # 1. Оставляем только буквы, цифры и пробелы
     clean_query = re.sub(r'[^\w\s]', '', query)
@@ -141,6 +237,7 @@ def retrieve_bm25(db_client: PostgreSQLClient, query: str, top_k: int, filters: 
         return []
     # ---------------------------
     filter_clause, params = _build_filter_clause(filters, allowed_doc_ids)
+    filter_clause, params = _build_indexing_guard(filter_clause, params, embedding_version)
     where_conjunction = "AND" if filter_clause else "WHERE"
     
     sql_query = f"""
@@ -159,9 +256,9 @@ def retrieve_bm25(db_client: PostgreSQLClient, query: str, top_k: int, filters: 
             results.append(InternalChunk(source_id=-1, **row))
     return results
 
-def retrieve_hybrid(db_client: PostgreSQLClient, embedding_model: SentenceTransformer, query: str, top_k: int, filters: Optional[Filters], allowed_doc_ids: Optional[List[str]]) -> List[InternalChunk]:
-    dense_results = retrieve_dense(db_client, embedding_model, query, top_k, filters, allowed_doc_ids)
-    bm25_results = retrieve_bm25(db_client, query, top_k, filters, allowed_doc_ids)
+def retrieve_hybrid(db_client: PostgreSQLClient, embedding_model: SentenceTransformer, query: str, top_k: int, filters: Optional[Filters], allowed_doc_ids: Optional[List[str]], embedding_config: Optional[Dict]) -> List[InternalChunk]:
+    dense_results = retrieve_dense(db_client, embedding_model, query, top_k, filters, allowed_doc_ids, embedding_config)
+    bm25_results = retrieve_bm25(db_client, query, top_k, filters, allowed_doc_ids, (embedding_config or {}).get("version"))
 
     k = 60
     rrf_scores = defaultdict(float)
@@ -191,7 +288,8 @@ def retrieve(
     reranker_model: Optional[CrossEncoder],
     query: str,
     top_k: int,
-    filters: Optional[Filters]
+    filters: Optional[Filters],
+    embedding_config: Optional[Dict],
 ) -> List[InternalChunk]:
     
     # Пре-фильтрация по метаданным документов
@@ -211,11 +309,11 @@ def retrieve(
     
     candidates: List[InternalChunk] = []
     if mode == "dense":
-        candidates = retrieve_dense(db_client, embedding_model, query, candidate_k, chunk_filters, allowed_doc_ids)
+        candidates = retrieve_dense(db_client, embedding_model, query, candidate_k, chunk_filters, allowed_doc_ids, embedding_config)
     elif mode == "bm25":
-        candidates = retrieve_bm25(db_client, query, candidate_k, chunk_filters, allowed_doc_ids)
+        candidates = retrieve_bm25(db_client, query, candidate_k, chunk_filters, allowed_doc_ids, (embedding_config or {}).get("version"))
     elif mode == "hybrid":
-        candidates = retrieve_hybrid(db_client, embedding_model, query, candidate_k, chunk_filters, allowed_doc_ids)
+        candidates = retrieve_hybrid(db_client, embedding_model, query, candidate_k, chunk_filters, allowed_doc_ids, embedding_config)
     else:
         raise ValueError(f"Неизвестный режим поиска: {mode}")
 
@@ -228,7 +326,7 @@ def retrieve(
     return reconstructed_chunks
 
 # --- Логика для графа знаний ---
-def _extract_entities_from_query(query: str) -> List[str]:
+def _extract_entities_from_query(query: str, db_client: Optional[PostgreSQLClient] = None) -> List[str]:
     system_prompt = "You are an API for named entity recognition. Your only output is a JSON array of strings."
     user_prompt = f"""
     Extract key entities (people, organizations, concepts, regulations) from the user query.
@@ -236,6 +334,7 @@ def _extract_entities_from_query(query: str) -> List[str]:
 
     Query: "{query}"
     """
+    start_time = datetime.utcnow()
     try:
         response = requests.post(OLLAMA_URL, json={
             "model": OLLAMA_MODEL, "system": system_prompt, "prompt": user_prompt,
@@ -243,17 +342,42 @@ def _extract_entities_from_query(query: str) -> List[str]:
         }, timeout=60)
         response.raise_for_status()
         entities = json.loads(response.json().get("response", "[]"))
+        log_llm_request(
+            db_client,
+            start_time=start_time,
+            end_time=datetime.utcnow(),
+            is_success=True,
+            request_type="graph_entity_extraction",
+            model_name=OLLAMA_MODEL,
+            prompt=user_prompt,
+            raw_response=response.text,
+        )
         return [str(e) for e in entities if isinstance(e, str)]
     except Exception as e:
         print(f"Graph Entity Extraction Error: {e}")
-        return []
+        log_llm_request(
+            db_client,
+            start_time=start_time,
+            end_time=datetime.utcnow(),
+            is_success=False,
+            request_type="graph_entity_extraction",
+            model_name=OLLAMA_MODEL,
+            prompt=user_prompt,
+            raw_response=None,
+            error_message=str(e),
+        )
+        fallback_entities = set()
+        fallback_entities.update(re.findall(r'"([^"]+)"', query))
+        fallback_entities.update(re.findall(r"'([^']+)'", query))
+        fallback_entities.update([word for word in re.findall(r'[A-ZА-ЯЁ][\w-]{2,}', query)])
+        return list({e.strip(): None for e in fallback_entities if e.strip()}.keys())
 
-def retrieve_graph(neo4j_client: Neo4jClient, query: str, graph_depth: int) -> str:
+def retrieve_graph(neo4j_client: Neo4jClient, db_client: Optional[PostgreSQLClient], query: str, graph_depth: int) -> str:
     print(f"Выполняется graph поиск для запроса: '{query[:50]}...'")
     if not neo4j_client or not neo4j_client.driver:
         return ""
 
-    entities = _extract_entities_from_query(query)
+    entities = _extract_entities_from_query(query, db_client=db_client)
     if not entities:
         return ""
 

@@ -24,7 +24,7 @@ if (Test-Path $dotEnvFile) {
 
 # --- 2. Запуск через Poetry ---
 Write-Host "`n--- СТАРТ ---" -ForegroundColor Cyan
-Write-Host "Запуск сервиса через poetry run start-worker (порт 8000)..."
+Write-Host "Запуск сервиса через poetry run start-worker (порт 8012 по умолчанию)..."
 Write-Host "----------------"
 
 poetry run start-worker

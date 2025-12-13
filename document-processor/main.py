@@ -89,7 +89,7 @@ def worker_supervisor(worker_func, stop_event: threading.Event, **kwargs):
             time.sleep(15)
     logging.info(f"Супервизор для воркера '{thread_name}' завершает работу.")
 
-def is_migration_needed(db_client: DatabaseClient, model_name: str, model_dim: int) -> bool:
+def is_migration_needed(db_client: DatabaseClient, model_name: str, model_dim: int, generator: str) -> bool:
     """
     Проверяет, нужна ли миграция, и инициализирует конфиг при первом запуске.
     Возвращает True, если нужна миграция, False - если все в порядке.
@@ -104,7 +104,8 @@ def is_migration_needed(db_client: DatabaseClient, model_name: str, model_dim: i
             initial_config = {
                 "model_name": model_name,
                 "dimension": model_dim,
-                "version": 1
+                "version": 1,
+                "generator": generator,
             }
             cur.execute(
                 """
@@ -128,10 +129,14 @@ def is_migration_needed(db_client: DatabaseClient, model_name: str, model_dim: i
         db_config = config_row['value']
         db_model_name = db_config.get('model_name')
         db_dim = db_config.get('dimension')
+        db_generator = db_config.get('generator')
 
         if db_model_name != model_name or db_dim != model_dim:
             logging.warning(f"ОБНАРУЖЕНО НЕСООТВЕТСТВИЕ КОНФИГУРАЦИИ: БД={{'model': '{db_model_name}', 'dim': {db_dim}}}, .env={{'model': '{model_name}', 'dim': {model_dim}}}.")
             return True
+
+        if db_generator and db_generator != generator:
+            logging.warning(f"Обнаружено различие способа генерации эмбеддингов: в БД '{db_generator}', в окружении '{generator}'. Обновите embedding_config при необходимости.")
 
     return False
 
@@ -150,10 +155,14 @@ def load_embedding_model_local():
     logging.info(f"Локальная модель '{model_name}' успешно загружена.")
     return model
 
-def get_dimension_from_api(api_base: str, model_name: str) -> int:
+def get_dimension_from_api(api_base: str, model_name: str, generator: str = "service") -> int:
     """Делает тестовый запрос к API, чтобы определить размерность векторов. В случае ошибки пробрасывает исключение."""
-    endpoint = f"{api_base.rstrip('/')}/embeddings"
-    payload = {"model": model_name, "input": ["test"]}
+    if generator == "ollama":
+        endpoint = f"{api_base.rstrip('/')}/api/embeddings"
+        payload = {"model": model_name, "prompt": "test"}
+    else:
+        endpoint = f"{api_base.rstrip('/')}/embeddings"
+        payload = {"model": model_name, "input": ["test"]}
     headers = {"Content-Type": "application/json"}
     logging.info(f"Отправка тестового запроса в {endpoint} для определения размерности...")
     
@@ -190,6 +199,7 @@ def startup_event():
         if neo4j_client.driver is None: neo4j_client = None
 
     embedding_mode = os.getenv("EMBEDDING_MODE", "local").strip().lower()
+    embedding_generator = os.getenv("EMBEDDING_GENERATOR") or ("service" if embedding_mode == "api" else "local_model")
     model_name_from_env = os.getenv("EMBEDDING_MODEL_NAME")
     if not model_name_from_env:
         raise ValueError("EMBEDDING_MODEL_NAME не задана в .env!")
@@ -205,12 +215,13 @@ def startup_event():
             raise ValueError("Для EMBEDDING_MODE='api' необходимо задать EMBEDDING_API_BASE в .env")
         
         try:
-            model_dimension = get_dimension_from_api(api_base, model_name_from_env)
+            model_dimension = get_dimension_from_api(api_base, model_name_from_env, embedding_generator)
             logging.info(f"Успешно подключено к API. Динамически определена размерность: {model_dimension}")
-            
+
             embedding_model = {
                 "mode": "api", "api_base": api_base,
-                "model_name": model_name_from_env, "dimension": model_dimension
+                "model_name": model_name_from_env, "dimension": model_dimension,
+                "generator": embedding_generator,
             }
             logging.info(f"Генератор эмбеддингов настроен на API: {api_base} с моделью '{model_name_from_env}'")
 
@@ -237,7 +248,7 @@ def startup_event():
     app.state.neo4j_client = neo4j_client
     app.state.embedding_model = embedding_model
 
-    if is_migration_needed(db_client, effective_model_name, model_dimension):
+    if is_migration_needed(db_client, effective_model_name, model_dimension, embedding_generator):
         logging.warning("="*50)
         logging.warning("!!! СИСТЕМА ЗАПУСКАЕТСЯ В РЕЖИМЕ МИГРАЦИИ ЭМБЕДДИНГОВ !!!")
         logging.warning("="*50)

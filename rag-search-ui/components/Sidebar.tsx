@@ -1,8 +1,6 @@
-
-
 import React, { useState, useEffect } from 'react';
 import { ConversationInfo } from '../types';
-import { getHistoryList, clearHistory } from '../services/api';
+import { getHistoryList } from '../services/api';
 
 interface SidebarProps {
   onNewChat: () => void;
@@ -12,7 +10,6 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ onNewChat, onSelectConversation }) => {
   const [history, setHistory] = useState<ConversationInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isClearing, setIsClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -32,25 +29,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onNewChat, onSelectConversation }) =>
     };
     fetchHistory();
   }, []);
-
-  const handleClearHistory = async () => {
-    if (window.confirm('Вы уверены, что хотите очистить всю историю чатов? Это действие необратимо.')) {
-      setIsClearing(true);
-      setError(null);
-      try {
-        const userId = 'default-user';
-        await clearHistory(userId);
-        setHistory([]);
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Произошла неизвестная ошибка';
-        console.error("Failed to clear history:", err);
-        alert(`Не удалось очистить историю: ${errorMessage}`);
-        setError(`Не удалось очистить историю: ${errorMessage}`);
-      } finally {
-        setIsClearing(false);
-      }
-    }
-  };
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString('ru-RU', {
@@ -102,21 +80,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onNewChat, onSelectConversation }) =>
             </div>
         )}
       </div>
-      <div className="mt-auto pt-4 border-t border-gray-700">
-        <button
-          onClick={handleClearHistory}
-          disabled={isClearing}
-          className="w-full bg-red-800 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed flex items-center justify-center"
-        >
-          {isClearing ? (
-             <>
-              <div className="w-4 h-4 border-2 border-t-transparent border-white rounded-full animate-spin mr-2"></div>
-              Очистка...
-            </>
-          ) : (
-            'Очистить историю'
-          )}
-        </button>
+      <div className="mt-auto pt-4 border-t border-gray-700 text-xs text-gray-500">
+        Очистка истории пока не поддерживается в API.
       </div>
     </aside>
   );

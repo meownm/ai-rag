@@ -39,7 +39,7 @@ ENV WORKER_MODEL_TYPE="local_torch"
 ENV WORKER_BATCH_SIZE=128
 
 # Открываем порт для Health Check
-EXPOSE 8000
+EXPOSE 8012
 
 # Команда запуска Uvicorn (через poetry entry point)
 ENTRYPOINT ["poetry", "run", "start-worker"]

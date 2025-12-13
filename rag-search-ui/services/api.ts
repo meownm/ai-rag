@@ -1,10 +1,6 @@
-
-
 import { AnswerRequest, StreamChunk, ConversationInfo } from '../types';
 
-// The backend is expected to be running on this URL.
-// In a real-world scenario, this would come from an environment variable.
-const API_BASE_URL = 'http://localhost:8020';
+const API_BASE_URL = import.meta.env.VITE_KB_SEARCH_API ?? 'http://localhost:8020';
 
 export const getAnswerStream = async (
   request: AnswerRequest,
@@ -40,10 +36,10 @@ export const getAnswerStream = async (
       if (done) {
         break;
       }
-      
+
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      
+
       for (let i = 0; i < lines.length - 1; i++) {
         const line = lines[i];
         if (line.startsWith('data: ')) {
@@ -69,7 +65,8 @@ export const getHistoryList = async (
   limit: number = 20,
   offset: number = 0
 ): Promise<ConversationInfo[]> => {
-  const response = await fetch(`${API_BASE_URL}/v1/history?user_id=${encodeURIComponent(userId)}&limit=${limit}&offset=${offset}`, {
+  const response = await fetch(`${API_BASE_URL}/v1/history?user_id=${encodeURIComponent(userId)}&limit=${limit}&offset=${offset}`,
+  {
     method: 'GET',
     headers: {
       'Accept': 'application/json'
@@ -83,18 +80,4 @@ export const getHistoryList = async (
 
   const data: ConversationInfo[] = await response.json();
   return data;
-};
-
-export const clearHistory = async (userId: string): Promise<void> => {
-  const response = await fetch(`${API_BASE_URL}/v1/history?user_id=${encodeURIComponent(userId)}`, {
-    method: 'DELETE',
-    headers: {
-      'Accept': 'application/json'
-    }
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to clear history: ${response.status} ${response.statusText} - ${errorText}`);
-  }
 };

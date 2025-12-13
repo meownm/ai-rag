@@ -89,32 +89,48 @@ def _make_embedding_api_request(api_endpoint: str, payload: dict) -> requests.Re
     return response
 
 def _generate_embeddings_api(texts: List[str], api_config: Dict, logger: logging.LoggerAdapter) -> List[list]:
-    """Генерирует эмбеддинги, вызывая внешний OpenAI-совместимый API."""
+    """Генерирует эмбеддинги, вызывая внешний API (OpenAI-совместимый или Ollama)."""
     api_base = api_config['api_base']
     model_name = api_config['model_name']
-    endpoint = f"{api_base}/embeddings"
-    
+    generator = api_config.get('generator', 'service')
+
+    if generator == 'ollama':
+        endpoint = f"{api_base.rstrip('/')}/api/embeddings"
+    else:
+        endpoint = f"{api_base}/embeddings"
+
     all_embeddings = []
     for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
         batch_texts = texts[i:i+EMBEDDING_BATCH_SIZE]
-        payload = {"model": model_name, "input": batch_texts}
-        
+
         try:
-            logger.info(f"Отправка батча из {len(batch_texts)} текстов в API эмбеддингов...")
-            response = _make_embedding_api_request(endpoint, payload)
-            response_data = response.json()
-            
-            batch_embeddings_sorted = sorted(response_data['data'], key=lambda e: e['index'])
-            batch_embeddings = [item['embedding'] for item in batch_embeddings_sorted]
-            all_embeddings.extend(batch_embeddings)
-            
+            if generator == 'ollama':
+                logger.info(f"Отправка {len(batch_texts)} текстов в Ollama embeddings API...")
+                for text in batch_texts:
+                    payload = {"model": model_name, "prompt": text}
+                    response = _make_embedding_api_request(endpoint, payload)
+                    response_data = response.json()
+                    embedding = response_data.get('embedding')
+                    if not embedding:
+                        raise RuntimeError("Ollama не вернул поле embedding")
+                    all_embeddings.append(embedding)
+            else:
+                payload = {"model": model_name, "input": batch_texts}
+                logger.info(f"Отправка батча из {len(batch_texts)} текстов в API эмбеддингов...")
+                response = _make_embedding_api_request(endpoint, payload)
+                response_data = response.json()
+
+                batch_embeddings_sorted = sorted(response_data['data'], key=lambda e: e['index'])
+                batch_embeddings = [item['embedding'] for item in batch_embeddings_sorted]
+                all_embeddings.extend(batch_embeddings)
+
         except requests.exceptions.RequestException as e:
             logger.error(f"Сетевая ошибка при вызове API эмбеддингов: {e}", exc_info=True)
             raise RuntimeError(f"Failed to get embeddings from API: {e}")
         except Exception as e:
             logger.error(f"Ошибка при обработке ответа от API эмбеддингов: {e}", exc_info=True)
             raise RuntimeError(f"Error processing API response: {e}")
-            
+
     return all_embeddings
 
 def generate_embeddings(chunks: List[Dict], embed_model: Any, logger: logging.LoggerAdapter) -> None:
