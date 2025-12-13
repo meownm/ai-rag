@@ -67,7 +67,7 @@ def _build_indexing_guard(filter_clause: str, params: list, embedding_version: O
     """
     readiness_conditions = [
         "c.embedding IS NOT NULL",
-        "lower(coalesce(c.enrichment_status->'embedding_generation'->>'status','')) = 'completed'",
+        "coalesce(c.enrichment_status->'embedding_generation'->>'status','') ILIKE 'completed'",
     ]
 
     if embedding_version is not None:
