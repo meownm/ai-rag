@@ -9,9 +9,9 @@ services:
     build:
       context: .             # Использовать текущую директорию как контекст сборки
       dockerfile: Dockerfile.amd # Использовать этот Dockerfile для сборки
-    # Пробрасываем порт 8002 хост-машины на порт 8000 внутри контейнера
+    # Пробрасываем порт 8102 хост-машины на порт 8000 внутри контейнера
     ports:
-      - "8002:8000"
+      - "8102:8000"
     # Подключаем именованный том для кэширования моделей Hugging Face
     volumes:
       - huggingface_cache:/root/.cache/huggingface
@@ -30,7 +30,7 @@ services:
       context: .
       dockerfile: Dockerfile.amd # Используем тот же самый образ, что и для GPU
     ports:
-      - "8001:8000"
+      - "8101:8000"
     volumes:
       - huggingface_cache:/root/.cache/huggingface
     # Секция 'deploy' и доступ к GPU здесь отсутствуют.

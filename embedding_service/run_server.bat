@@ -2,8 +2,8 @@
 setlocal
 
 rem --- Configuration ---
-set CPU_PORT=8001
-set GPU_PORT=8002
+set CPU_PORT=8101
+set GPU_PORT=8102
 
 echo ----------------------------------------------------
 echo  Launch Script for Embeddings Service (Poetry)

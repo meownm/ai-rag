@@ -89,32 +89,48 @@ def _make_embedding_api_request(api_endpoint: str, payload: dict) -> requests.Re
     return response
 
 def _generate_embeddings_api(texts: List[str], api_config: Dict, logger: logging.LoggerAdapter) -> List[list]:
-    """Генерирует эмбеддинги, вызывая внешний OpenAI-совместимый API."""
+    """Генерирует эмбеддинги, вызывая внешний API (OpenAI-совместимый или Ollama)."""
     api_base = api_config['api_base']
     model_name = api_config['model_name']
-    endpoint = f"{api_base}/embeddings"
-    
+    generator = api_config.get('generator', 'service')
+
+    if generator == 'ollama':
+        endpoint = f"{api_base.rstrip('/')}/api/embeddings"
+    else:
+        endpoint = f"{api_base}/embeddings"
+
     all_embeddings = []
     for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
         batch_texts = texts[i:i+EMBEDDING_BATCH_SIZE]
-        payload = {"model": model_name, "input": batch_texts}
-        
+
         try:
-            logger.info(f"Отправка батча из {len(batch_texts)} текстов в API эмбеддингов...")
-            response = _make_embedding_api_request(endpoint, payload)
-            response_data = response.json()
-            
-            batch_embeddings_sorted = sorted(response_data['data'], key=lambda e: e['index'])
-            batch_embeddings = [item['embedding'] for item in batch_embeddings_sorted]
-            all_embeddings.extend(batch_embeddings)
-            
+            if generator == 'ollama':
+                logger.info(f"Отправка {len(batch_texts)} текстов в Ollama embeddings API...")
+                for text in batch_texts:
+                    payload = {"model": model_name, "prompt": text}
+                    response = _make_embedding_api_request(endpoint, payload)
+                    response_data = response.json()
+                    embedding = response_data.get('embedding')
+                    if not embedding:
+                        raise RuntimeError("Ollama не вернул поле embedding")
+                    all_embeddings.append(embedding)
+            else:
+                payload = {"model": model_name, "input": batch_texts}
+                logger.info(f"Отправка батча из {len(batch_texts)} текстов в API эмбеддингов...")
+                response = _make_embedding_api_request(endpoint, payload)
+                response_data = response.json()
+
+                batch_embeddings_sorted = sorted(response_data['data'], key=lambda e: e['index'])
+                batch_embeddings = [item['embedding'] for item in batch_embeddings_sorted]
+                all_embeddings.extend(batch_embeddings)
+
         except requests.exceptions.RequestException as e:
             logger.error(f"Сетевая ошибка при вызове API эмбеддингов: {e}", exc_info=True)
             raise RuntimeError(f"Failed to get embeddings from API: {e}")
         except Exception as e:
             logger.error(f"Ошибка при обработке ответа от API эмбеддингов: {e}", exc_info=True)
             raise RuntimeError(f"Error processing API response: {e}")
-            
+
     return all_embeddings
 
 def generate_embeddings(chunks: List[Dict], embed_model: Any, logger: logging.LoggerAdapter) -> None:
@@ -298,7 +314,6 @@ def enrichment_worker_loop(stop_event: threading.Event, db: DatabaseClient, neo4
                     try:
                         if stage == 'metadata_extraction':
                             result = extract_metadata_with_llm(chunk['text'], db, single_log_context)
-                            # <<< ИСПРАВЛЕНИЕ: Проверяем, что LLM не вернул ошибку, прежде чем считать успешным
                             if result.get("error"):
                                 raise RuntimeError(f"LLM error: {result.get('raw_response', 'No response')}")
                             db.update_chunk_enrichment_status(chunk['doc_id'], chunk['chunk_id'], stage, 'completed', result=result)
@@ -311,7 +326,6 @@ def enrichment_worker_loop(stop_event: threading.Event, db: DatabaseClient, neo4
                             db.update_chunk_enrichment_status(chunk['doc_id'], chunk['chunk_id'], stage, 'completed')
                             METRICS["chunks_enriched_total"].labels(stage='relations').inc()
                     except Exception as e:
-                         # <<< ИСПРАВЛЕНИЕ: Ловим ошибку для одного чанка и продолжаем цикл
                         single_task_logger.warning(f"Ошибка при обработке чанка: {e}")
                         db.update_chunk_enrichment_status(chunk['doc_id'], chunk['chunk_id'], stage, 'failed', error=str(e))
                         METRICS["processing_errors_total"].labels(worker_type='enrichment', stage=stage).inc()
@@ -460,7 +474,6 @@ def migration_worker_loop(stop_event: threading.Event, db: DatabaseClient, embed
                     embedding_new = data.embedding_new,
                     embedding_version = data.embedding_version
                 FROM (VALUES %s) AS data (embedding_new, embedding_version, doc_id, chunk_id)
-                -- <<< ИСПРАВЛЕНИЕ: Добавлено явное приведение типа к UUID, чтобы избежать ошибки.
                 WHERE chunks.doc_id = data.doc_id::uuid AND chunks.chunk_id = data.chunk_id;
                 """,
                 update_data,

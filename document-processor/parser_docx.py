@@ -12,8 +12,8 @@ import shutil
 from typing import List, Dict, Any, Tuple
 
 from PIL import Image, UnidentifiedImageError
-import pytesseract
 from dotenv import load_dotenv
+from ocr_backend import OCR_ENABLED, ocr_image_to_text
 
 from docx import Document
 from docx.document import Document as DocumentObject
@@ -23,8 +23,6 @@ from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
 
 load_dotenv()
-OCR_ENABLED = os.getenv("OCR_ENABLED", "false").strip().lower() == "true"
-OCR_LANG = os.getenv("OCR_LANG", "rus+eng")
 
 
 def make_block(
@@ -114,7 +112,9 @@ def parse_docx(path: str, doc_id: str) -> Tuple[List[Dict[str, Any]], Dict[str, 
             if text:
                 level = get_heading_level(item)
                 block_type = "heading" if level > 0 else "paragraph"
-                if level > 0: current_section, current_level = text, level
+                if level > 0:
+                    current_section, current_level = text, level
+                    text = f"{'#' * min(level, 6)} {text}"
                 chunk_id_counter += 1
                 blocks.append(make_block(doc_id, chunk_id_counter, block_type, text, current_section, current_level))
         elif isinstance(item, Table):
@@ -165,7 +165,7 @@ def parse_docx(path: str, doc_id: str) -> Tuple[List[Dict[str, Any]], Dict[str, 
                 
                 if image:
                     try:
-                        ocr_text = pytesseract.image_to_string(image, lang=OCR_LANG)
+                        ocr_text = ocr_image_to_text(image)
                         if ocr_text.strip():
                             chunk_id_counter += 1
                             blocks.append(make_block(doc_id, chunk_id_counter, "image_text", ocr_text, current_section, current_level, metadata={"source": "ocr_from_embedded_image", "image_ref": rel.target_ref}))

@@ -13,13 +13,8 @@ const App: React.FC = () => {
   };
 
   const handleSelectConversation = (conversation: ConversationInfo) => {
-    // This is a placeholder. In a full app, you'd fetch the conversation messages.
-    // For this example, selecting a conversation just shows its title but starts a new chat context.
     setActiveConversationId(conversation.conversation_id);
     console.log("Selected conversation:", conversation.conversation_id);
-    // To keep the demo simple, we will reset the view for a "new" chat
-    // under the selected conversation context.
-    setActiveConversationId(null); 
   };
 
   return (

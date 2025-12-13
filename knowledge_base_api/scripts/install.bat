@@ -17,7 +17,7 @@ echo.
 echo [*] Installing API dependencies based on poetry.lock file...
 cd ..
 
-REM --no-root: не устанавливаем сам проект как библиотеку (КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ)
+REM --no-root: не устанавливаем сам проект как библиотеку
 REM --with dev: устанавливаем также зависимости для разработки (pytest)
 REM --sync: удаляет из окружения пакеты, которых больше нет в lock-файле
 poetry install --no-root --with dev --sync

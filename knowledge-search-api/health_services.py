@@ -13,11 +13,11 @@ def check_postgresql(db_client: PostgreSQLClient) -> Dict[str, Any]:
     """
     Проверяет подключение к PostgreSQL путем выполнения простого запроса.
     """
-    if not db_client or not db_client.conn:
+    if not db_client or not db_client.pool:
         return {"status": "error", "details": "Database client not initialized."}
     try:
         # Выполняем самый простой и быстрый запрос для проверки живости соединения
-        with db_client.conn.cursor() as cur:
+        with db_client.get_cursor() as cur:
             cur.execute("SELECT 1")
         return {"status": "ok"}
     except Exception as e:
