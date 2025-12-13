@@ -1,0 +1,51 @@
+[tool.poetry]
+name = "document-processor"
+version = "3.3.0"
+description = "A background worker that processes document formats from MinIO, enriches them using LLMs, and indexes them for search."
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.111.0"
+uvicorn = { extras = ["standard"], version = "^0.29.0" }
+python-dotenv = "^1.0.1"
+psycopg2-binary = "^2.9.9"
+pgvector = "^0.2.0"
+numpy = "^1.26.4"
+sentence-transformers = "^2.7.0"
+torch = {version = "^2.3.0", source = "pytorch"}
+transformers = ">=4.30.0"
+minio = "^7.2.0"
+neo4j = "^5.20.0"
+tiktoken = "^0.7.0"
+pdfplumber = "^0.11.0"
+Pillow = "^10.3.0"
+pytesseract = "^0.3.10"
+beautifulsoup4 = "^4.12.3"
+lxml = "^5.2.1"
+pypandoc-binary = "^1.13"
+odfpy = "^1.4.1"
+python-pptx = "^0.6.23"
+pandas = "^2.2.2"
+openpyxl = "^3.1.3"
+chardet = "^5.2.0"
+tenacity = "^8.3.0"
+prometheus-client = "^0.20.0"
+requests = "^2.31.0"
+python-docx = "^1.1.2"
+einops = "^0.8.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2.0"
+requests-mock = "^1.12.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[[tool.poetry.source]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu121"
+priority = "explicit"

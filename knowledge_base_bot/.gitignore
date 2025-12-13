@@ -1,0 +1,15 @@
+# Локальные переменные окружения
+.env
+
+# Виртуальное окружение Poetry
+.venv/
+
+# Кэш Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Папки от IDE
+.vscode/
+.idea/

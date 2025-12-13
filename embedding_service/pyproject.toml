@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "embeddings-service"
+version = "0.1.0"
+description = "Unified service for creating embeddings with CPU and GPU support in Docker."
+authors = ["Your Name <your.email@example.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.12"
+fastapi = ">=0.104.1"
+uvicorn = {extras = ["standard"], version = ">=0.23.2"}
+pydantic = ">=2.4.2"
+# ВАЖНО: torch и его зависимости уже будут в базовом Docker-образе rocm/pytorch.
+# Poetry будет использовать существующую установку, поэтому мы не указываем его здесь,
+# чтобы избежать конфликтов версий при установке внутри Docker.
+# torch = ">=2.1.0"
+transformers = ">=4.35.0"
+sentence-transformers = ">=2.2.2"
+einops = ">=0.1.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

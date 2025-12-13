@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # Сервисы db, minio и createbuckets удалены, так как они теперь внешние.
+
+  api:
+    build:
+      context: ./knowledge_base_api
+    container_name: kb_api_service
+    env_file: ./knowledge_base_api/.env
+    ports:
+      - "8000:8000"
+    # depends_on больше не нужен, так как зависимости внешние.
+    # Docker не может проверить их готовность.
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: ./knowledge_base_bot
+    container_name: kb_telegram_bot
+    env_file: ./knowledge_base_bot/.env
+    depends_on:
+      # Бот все еще зависит от API. Условие 'service_healthy' можно убрать,
+      # так как у API нет healthcheck, но depends_on оставит порядок запуска.
+      - api
+    restart: unless-stopped
+
+# Тома больше не нужны, если вы не используете внутренние db и minio.
+# volumes:
+#  postgres_data:
+#  minio_data:

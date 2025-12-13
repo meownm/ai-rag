@@ -1,0 +1,57 @@
+version: '3.9'
+
+# Раздел 'services' определяет все контейнеры, которые являются частью вашего приложения.
+services:
+
+  # 1. Сервис для обработки запросов на GPU
+  embedding-service-gpu:
+    # Указываем Docker, как собрать образ для этого сервиса
+    build:
+      context: .             # Использовать текущую директорию как контекст сборки
+      dockerfile: Dockerfile.amd # Использовать этот Dockerfile для сборки
+    # Пробрасываем порт 8002 хост-машины на порт 8000 внутри контейнера
+    ports:
+      - "8002:8000"
+    # Подключаем именованный том для кэширования моделей Hugging Face
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    # САМАЯ ВАЖНАЯ ЧАСТЬ: Предоставление доступа к GPU
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # Эта конфигурация запрашивает у Docker доступ к GPU
+            - driver: kfd       # 'kfd' - это драйвер ядра Linux для AMD GPU, необходимый для ROCm в WSL2.
+              capabilities: [gpu] # Указываем, что нам нужен именно GPU
+
+  # 2. Сервис для обработки запросов на CPU
+  embedding-service-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.amd # Используем тот же самый образ, что и для GPU
+    ports:
+      - "8001:8000"
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    # Секция 'deploy' и доступ к GPU здесь отсутствуют.
+    # Поэтому, несмотря на то что в образе есть ROCm,
+    # приложение не увидит GPU и автоматически откатится на CPU.
+
+  # 3. Пример другого сервиса (база данных PostgreSQL)
+  postgres_db:
+    image: postgres:15-alpine # Используем готовый официальный образ
+    # Переменные окружения для настройки базы данных
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=mydb
+    ports:
+      - "5432:5432" # Пробрасываем стандартный порт Postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Том для сохранения данных БД
+
+# Раздел 'volumes' определяет именованные тома.
+# Docker управляет ими, и они сохраняются даже после остановки и удаления контейнеров.
+volumes:
+  huggingface_cache: # Том для кэша Hugging Face. Оба сервиса (CPU/GPU) используют его совместно.
+  postgres_data:     # Том для данных PostgreSQL.
