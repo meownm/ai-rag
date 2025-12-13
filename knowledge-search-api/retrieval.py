@@ -246,7 +246,11 @@ def _extract_entities_from_query(query: str) -> List[str]:
         return [str(e) for e in entities if isinstance(e, str)]
     except Exception as e:
         print(f"Graph Entity Extraction Error: {e}")
-        return []
+        fallback_entities = set()
+        fallback_entities.update(re.findall(r'"([^"]+)"', query))
+        fallback_entities.update(re.findall(r"'([^']+)'", query))
+        fallback_entities.update([word for word in re.findall(r'[A-ZА-ЯЁ][\w-]{2,}', query)])
+        return list({e.strip(): None for e in fallback_entities if e.strip()}.keys())
 
 def retrieve_graph(neo4j_client: Neo4jClient, query: str, graph_depth: int) -> str:
     print(f"Выполняется graph поиск для запроса: '{query[:50]}...'")

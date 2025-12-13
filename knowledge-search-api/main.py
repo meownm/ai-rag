@@ -61,7 +61,9 @@ async def lifespan(app: FastAPI):
         if app.state.neo4j_client.driver is None:
             app.state.neo4j_client = None
     
-    app.state.embedding_model = load_embedding_model(os.getenv("EMBEDDING_MODEL_NAME"))
+    app.state.embedding_model = load_embedding_model(
+        os.getenv("EMBEDDING_MODEL_NAME"), device=device
+    )
 
     app.state.reranker_model = None
     if os.getenv("RERANKER_ENABLED", "false").lower() == 'true':
@@ -111,6 +113,18 @@ def _filter_used_citations(answer_text: str, all_citations: List[HighlightedCita
         used_ids.update(ids)
     return sorted([c for c in all_citations if c.source_id in used_ids], key=lambda c: c.source_id)
 
+
+def _build_citation_fallback(retrieved_chunks: List[InternalChunk]) -> tuple[str, List[HighlightedCitation]]:
+    """Возвращает безопасный fallback-ответ и список цитат, если Ollama/LLM недоступен."""
+    fallback_answer = "Не удалось сгенерировать сводный ответ, но вот наиболее релевантные фрагменты:\n\n"
+    citations_for_response = [
+        HighlightedCitation(highlighted_text=chunk.text, **chunk.dict(exclude={"metadata"}))
+        for chunk in retrieved_chunks
+    ]
+    for citation in citations_for_response:
+        fallback_answer += f"**[Источник {citation.source_id}: {citation.filename}]**\n{citation.highlighted_text}\n\n"
+    return fallback_answer, citations_for_response
+
 # --- Эндпоинты API ---
 
 @app.post("/v1/answer", tags=["Search"])
@@ -152,20 +166,33 @@ async def get_answer(req: AnswerRequest, request: Request):
         return response_data
         
     context_data = build_context(retrieved_chunks, conversation_history, graph_context_str)
-    
+
     if req.stream:
         async def stream_generator():
             full_answer = ""
-            for token in generate_answer_stream(
-                query=req.query, context=context_data["context_str"],
-                history_str=context_data["history_str"], max_tokens=req.max_tokens
-            ):
-                full_answer += token
-                yield f"data: {StreamTextChunk(content=token).json()}\n\n"
-            
-            is_success = bool(full_answer.strip())
-            verified_answer, all_highlighted = verify_and_highlight_citations(full_answer, retrieved_chunks, embedding_model) if is_success else (full_answer, [])
-            final_citations = _filter_used_citations(verified_answer, all_highlighted)
+            stream_error = None
+            citations_for_response: List[HighlightedCitation] = []
+
+            try:
+                for token in generate_answer_stream(
+                    query=req.query, context=context_data["context_str"],
+                    history_str=context_data["history_str"], max_tokens=req.max_tokens
+                ):
+                    full_answer += token
+                    yield f"data: {StreamTextChunk(content=token).json()}\n\n"
+            except Exception as exc:
+                stream_error = exc
+                print(f"Streaming generation failed, using fallback: {exc}")
+
+            if stream_error or not full_answer.strip():
+                full_answer, citations_for_response = _build_citation_fallback(retrieved_chunks)
+                for chunk in full_answer.split("\n\n"):
+                    if chunk.strip():
+                        yield f"data: {StreamTextChunk(content=chunk + '\n\n').json()}\n\n"
+
+            is_success = not stream_error and bool(full_answer.strip())
+            verified_answer, all_highlighted = verify_and_highlight_citations(full_answer, retrieved_chunks, embedding_model) if is_success else (full_answer, citations_for_response)
+            final_citations = citations_for_response if not is_success else _filter_used_citations(verified_answer, all_highlighted)
             latency = int((time.time() - start_time) * 1000)
 
             metadata_chunk = StreamMetadataChunk(
@@ -189,12 +216,9 @@ async def get_answer(req: AnswerRequest, request: Request):
             query=req.query, context=context_data["context_str"],
             history_str=context_data["history_str"], max_tokens=req.max_tokens
         )
-        
+
         if not generated_answer:
-            final_answer = "Не удалось сгенерировать сводный ответ, но вот наиболее релевантные фрагменты:\n\n"
-            citations_for_response = [HighlightedCitation(highlighted_text=chunk.text, **chunk.dict(exclude={"metadata"})) for chunk in retrieved_chunks]
-            for c in citations_for_response:
-                final_answer += f"**[Источник {c.source_id}: {c.filename}]**\n{c.highlighted_text}\n\n"
+            final_answer, citations_for_response = _build_citation_fallback(retrieved_chunks)
             is_success = False
         else:
             final_answer, citations_for_response_all = verify_and_highlight_citations(generated_answer, retrieved_chunks, embedding_model)

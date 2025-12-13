@@ -30,9 +30,6 @@ def build_context(
         else:
             break
             
-    if history_str:
-        context_parts.append(f"<history>\n{history_str.strip()}\n</history>")
-
     remaining_tokens = MAX_CONTEXT_TOKENS - total_tokens
     chunks_token_limit = int(remaining_tokens * 0.7)
     graph_token_limit = int(remaining_tokens * 0.2)
