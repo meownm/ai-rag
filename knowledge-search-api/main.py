@@ -4,6 +4,7 @@ import json
 import uvicorn
 import torch
 import re
+from datetime import datetime
 from fastapi import FastAPI, Request, Response, status as http_status, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,7 @@ from contextlib import asynccontextmanager
 from typing import Generator, List
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer, CrossEncoder
+import psycopg2.extras
 
 # --- Локальные модули ---
 from schemas import (
@@ -21,21 +23,52 @@ from schemas import (
 from clients import PostgreSQLClient, Neo4jClient, load_embedding_model
 from retrieval import retrieve, retrieve_graph
 from context_builder import build_context
-from llm_provider import generate_answer, generate_answer_stream
+from llm_provider import build_prompts, generate_answer, generate_answer_stream
 from history import (
     get_or_create_conversation, get_conversation_history, save_search_result,
     get_history_list_for_user, get_full_history_by_query_id
 )
 from highlighter import verify_and_highlight_citations
 from health_services import check_postgresql, check_neo4j, check_ollama
+from llm_logging import log_llm_request
 
 load_dotenv()
+
+
+def _load_embedding_config(db_client: PostgreSQLClient) -> dict:
+    fallback_mode = os.getenv("EMBEDDING_MODE", "local")
+    fallback = {
+        "model_name": os.getenv("EMBEDDING_MODEL_NAME"),
+        "version": 1,
+        "mode": fallback_mode,
+        "api_base": os.getenv("EMBEDDING_API_BASE"),
+        "generator": os.getenv("EMBEDDING_GENERATOR") or ("service" if fallback_mode == "api" else "local"),
+    }
+
+    try:
+        with db_client.get_cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("SELECT value FROM settings WHERE key = 'embedding_config';")
+            row = cur.fetchone()
+            if row and row.get("value"):
+                config = row["value"]
+                return {
+                    "model_name": config.get("model_name") or fallback.get("model_name"),
+                    "version": config.get("version", fallback["version"]),
+                    "mode": config.get("mode") or config.get("model_type") or fallback.get("mode"),
+                    "api_base": config.get("api_base") or fallback.get("api_base"),
+                    "generator": config.get("generator") or fallback.get("generator"),
+                }
+    except Exception as e:  # noqa: BLE001
+        print(f"Failed to load embedding_config from DB, using fallback: {e}")
+
+    return fallback
+
 
 # --- Управление жизненным циклом приложения ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("INFO:     Событие 'startup': инициализация ресурсов...")
-    
+
     if torch.cuda.is_available():
         device = "cuda"
     elif torch.backends.mps.is_available():
@@ -43,14 +76,14 @@ async def lifespan(app: FastAPI):
     else:
         device = "cpu"
     print(f"INFO:     Выбрано устройство для моделей: {device}")
-    
+
     db_params = {
         "host": os.getenv("DB_HOST"), "port": os.getenv("DB_PORT"),
         "dbname": os.getenv("DB_NAME"), "user": os.getenv("DB_USER"),
         "password": os.getenv("DB_PASSWORD")
     }
     app.state.db_client = PostgreSQLClient(db_params)
-    
+
     app.state.neo4j_client = None
     if os.getenv("NEO4J_ENABLED", "false").lower() == 'true':
         app.state.neo4j_client = Neo4jClient(
@@ -60,8 +93,11 @@ async def lifespan(app: FastAPI):
         )
         if app.state.neo4j_client.driver is None:
             app.state.neo4j_client = None
-    
-    app.state.embedding_model = load_embedding_model(os.getenv("EMBEDDING_MODEL_NAME"))
+
+    app.state.embedding_config = _load_embedding_config(app.state.db_client)
+    app.state.embedding_model = load_embedding_model(
+        app.state.embedding_config.get("model_name") or os.getenv("EMBEDDING_MODEL_NAME"), device=device
+    )
 
     app.state.reranker_model = None
     if os.getenv("RERANKER_ENABLED", "false").lower() == 'true':
@@ -111,6 +147,18 @@ def _filter_used_citations(answer_text: str, all_citations: List[HighlightedCita
         used_ids.update(ids)
     return sorted([c for c in all_citations if c.source_id in used_ids], key=lambda c: c.source_id)
 
+
+def _build_citation_fallback(retrieved_chunks: List[InternalChunk]) -> tuple[str, List[HighlightedCitation]]:
+    """Возвращает безопасный fallback-ответ и список цитат, если Ollama/LLM недоступен."""
+    fallback_answer = "Не удалось сгенерировать сводный ответ, но вот наиболее релевантные фрагменты:\n\n"
+    citations_for_response = [
+        HighlightedCitation(highlighted_text=chunk.text, **chunk.dict(exclude={"metadata"}))
+        for chunk in retrieved_chunks
+    ]
+    for citation in citations_for_response:
+        fallback_answer += f"**[Источник {citation.source_id}: {citation.filename}]**\n{citation.highlighted_text}\n\n"
+    return fallback_answer, citations_for_response
+
 # --- Эндпоинты API ---
 
 @app.post("/v1/answer", tags=["Search"])
@@ -128,7 +176,7 @@ async def get_answer(req: AnswerRequest, request: Request):
     graph_context_str, graph_status = "", "disabled"
     if "graph" in req.mode:
         if neo4j_client:
-            graph_context_str = retrieve_graph(neo4j_client, req.query, req.graph_depth)
+            graph_context_str = retrieve_graph(neo4j_client, db_client, req.query, req.graph_depth)
             graph_status = "ok" if graph_context_str else "empty"
         else:
             graph_status = "unavailable"
@@ -137,8 +185,14 @@ async def get_answer(req: AnswerRequest, request: Request):
     text_search_mode = req.mode.replace("+graph", "")
     if text_search_mode in ["dense", "bm25", "hybrid"]:
         retrieved_chunks = retrieve(
-            mode=text_search_mode, db_client=db_client, embedding_model=embedding_model,
-            reranker_model=reranker_model, query=req.query, top_k=req.top_k, filters=req.filters
+            mode=text_search_mode,
+            db_client=db_client,
+            embedding_model=embedding_model,
+            reranker_model=reranker_model,
+            query=req.query,
+            top_k=req.top_k,
+            filters=req.filters,
+            embedding_config=app.state.embedding_config,
         )
 
     if not retrieved_chunks and not graph_context_str:
@@ -152,20 +206,47 @@ async def get_answer(req: AnswerRequest, request: Request):
         return response_data
         
     context_data = build_context(retrieved_chunks, conversation_history, graph_context_str)
-    
+    prompts = build_prompts(req.query, context_data["context_str"], context_data["history_str"])
+
     if req.stream:
         async def stream_generator():
             full_answer = ""
-            for token in generate_answer_stream(
-                query=req.query, context=context_data["context_str"],
-                history_str=context_data["history_str"], max_tokens=req.max_tokens
-            ):
-                full_answer += token
-                yield f"data: {StreamTextChunk(content=token).json()}\n\n"
-            
-            is_success = bool(full_answer.strip())
-            verified_answer, all_highlighted = verify_and_highlight_citations(full_answer, retrieved_chunks, embedding_model) if is_success else (full_answer, [])
-            final_citations = _filter_used_citations(verified_answer, all_highlighted)
+            stream_error = None
+            citations_for_response: List[HighlightedCitation] = []
+            llm_start = datetime.utcnow()
+
+            try:
+                for token in generate_answer_stream(
+                    query=req.query, context=context_data["context_str"],
+                    history_str=context_data["history_str"], max_tokens=req.max_tokens, prompts=prompts
+                ):
+                    full_answer += token
+                    yield f"data: {StreamTextChunk(content=token).json()}\n\n"
+            except Exception as exc:
+                stream_error = exc
+                print(f"Streaming generation failed, using fallback: {exc}")
+
+            if stream_error or not full_answer.strip():
+                full_answer, citations_for_response = _build_citation_fallback(retrieved_chunks)
+                for chunk in full_answer.split("\n\n"):
+                    if chunk.strip():
+                        chunk_payload = StreamTextChunk(content=f"{chunk}\n\n").json()
+                        yield f"data: {chunk_payload}\n\n"
+
+            is_success = not stream_error and bool(full_answer.strip())
+            log_llm_request(
+                db_client,
+                start_time=llm_start,
+                end_time=datetime.utcnow(),
+                is_success=is_success,
+                request_type="answer_generation_stream",
+                model_name=os.getenv("OLLAMA_MODEL"),
+                prompt=prompts[1],
+                raw_response=full_answer,
+                error_message=str(stream_error) if stream_error else None,
+            )
+            verified_answer, all_highlighted = verify_and_highlight_citations(full_answer, retrieved_chunks, embedding_model) if is_success else (full_answer, citations_for_response)
+            final_citations = citations_for_response if not is_success else _filter_used_citations(verified_answer, all_highlighted)
             latency = int((time.time() - start_time) * 1000)
 
             metadata_chunk = StreamMetadataChunk(
@@ -185,21 +266,31 @@ async def get_answer(req: AnswerRequest, request: Request):
 
     else:
         is_success = False
+        llm_start = datetime.utcnow()
         generated_answer = generate_answer(
             query=req.query, context=context_data["context_str"],
-            history_str=context_data["history_str"], max_tokens=req.max_tokens
+            history_str=context_data["history_str"], max_tokens=req.max_tokens, prompts=prompts
         )
-        
+
         if not generated_answer:
-            final_answer = "Не удалось сгенерировать сводный ответ, но вот наиболее релевантные фрагменты:\n\n"
-            citations_for_response = [HighlightedCitation(highlighted_text=chunk.text, **chunk.dict(exclude={"metadata"})) for chunk in retrieved_chunks]
-            for c in citations_for_response:
-                final_answer += f"**[Источник {c.source_id}: {c.filename}]**\n{c.highlighted_text}\n\n"
+            final_answer, citations_for_response = _build_citation_fallback(retrieved_chunks)
             is_success = False
         else:
             final_answer, citations_for_response_all = verify_and_highlight_citations(generated_answer, retrieved_chunks, embedding_model)
             citations_for_response = _filter_used_citations(final_answer, citations_for_response_all)
             is_success = True
+
+        log_llm_request(
+            db_client,
+            start_time=llm_start,
+            end_time=datetime.utcnow(),
+            is_success=is_success,
+            request_type="answer_generation",
+            model_name=os.getenv("OLLAMA_MODEL"),
+            prompt=prompts[1],
+            raw_response=generated_answer or "",
+            error_message=None if is_success else "Empty or failed response from LLM",
+        )
         
         latency = int((time.time() - start_time) * 1000)
         

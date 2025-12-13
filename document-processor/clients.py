@@ -193,7 +193,6 @@ class DatabaseClient:
                         embedding_version = data.embedding_version,
                         enrichment_status = jsonb_set(enrichment_status, '{embedding_generation}', data.status::jsonb)
                     FROM (VALUES %s) AS data (embedding, embedding_version, status, doc_id, chunk_id)
-                    -- <<< ИСПРАВЛЕНИЕ: Добавлено явное приведение типа к UUID, чтобы избежать ошибки.
                     WHERE chunks.doc_id = data.doc_id::uuid AND chunks.chunk_id = data.chunk_id;
                     """,
                     update_data,

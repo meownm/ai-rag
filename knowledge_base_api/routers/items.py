@@ -91,6 +91,14 @@ async def search_items(q: str, db=Depends(get_db), current_user: User = Depends(
     result = await db.execute(query)
     return result.all()
 
+@router.get("/items/{item_uuid}", response_model=ItemResponse, summary="Получить элемент по UUID")
+async def get_item(item_uuid: uuid.UUID, db=Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Возвращает последнее активное состояние элемента по его UUID."""
+    item = await services.get_active_item_by_uuid(db, current_user, item_uuid)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return item
+
 @router.get("/items/{item_uuid}/download", response_model=FileDownloadResponse, summary="Получить ссылку для скачивания файла")
 async def get_file_download_url(item_uuid: uuid.UUID, db=Depends(get_db), s3_client=Depends(get_s3_client), current_user: User = Depends(get_current_user)):
     """

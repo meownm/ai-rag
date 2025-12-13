@@ -19,8 +19,6 @@ LOGGING_CONFIG: Dict = {
     "disable_existing_loggers": False,
     "filters": {
         "trace_id_filter": {
-            # --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ---
-            # Вместо '__main__.TraceIdFilter' мы используем стабильный путь
             "()": "logging_config.TraceIdFilter",
         }
     },

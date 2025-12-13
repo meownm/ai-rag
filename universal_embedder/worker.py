@@ -500,9 +500,9 @@ class WorkerApp:
                 UPDATE {self.CHUNKS_TABLE}
                 SET 
                     enrichment_status = jsonb_set(
-                        COALESCE(enrichment_status, '{}'::jsonb), 
-                        '{{embedding_task}}', 
-                        $4::jsonb, 
+                        COALESCE(enrichment_status, '{}'::jsonb),
+                        '{{embedding_generation}}',
+                        $4::jsonb,
                         true
                     )
                 WHERE doc_id = $2 AND chunk_id = $3;
@@ -611,8 +611,8 @@ class WorkerApp:
                         SET 
                             enrichment_status = jsonb_set(
                                 COALESCE(c.enrichment_status, '{{}}'::jsonb), 
-                                '{{embedding_task}}', 
-                                '{{"status": "PROCESSING", "processor": "{self.worker_id}", "model": "{self.model_name}", "device": "{self.model_manager.device if self.model_type == "local_torch" else "remote"}"}}'::jsonb, 
+                                '{{embedding_generation}}',
+                                '{{"status": "PROCESSING", "processor": "{self.worker_id}", "model": "{self.model_name}", "device": "{self.model_manager.device if self.model_type == "local_torch" else "remote"}"}}'::jsonb,
                                 true
                             )
                         FROM task_to_process t
@@ -694,8 +694,8 @@ class WorkerApp:
                                     embedding_version = $4,
                                     enrichment_status = jsonb_set(
                                         COALESCE(enrichment_status, '{}'::jsonb), 
-                                        '{{embedding_task}}', 
-                                        $5::jsonb, 
+                                        '{{embedding_generation}}',
+                                        $5::jsonb,
                                         true
                                     )
                                 WHERE doc_id = $2 AND chunk_id = $3;
@@ -779,8 +779,8 @@ class WorkerApp:
 def start_uvicorn():
     """Точка входа Poetry для запуска Uvicorn."""
     import uvicorn
-    # Используем порт 8000, который зафиксирован в pyproject.toml
-    port = int(os.environ.get("UVICORN_PORT", 8000)) 
+    # Используем порт 8012, чтобы не пересекаться с другими сервисами по умолчанию
+    port = int(os.environ.get("UVICORN_PORT", 8012))
     uvicorn.run("worker:app", host="0.0.0.0", port=port, log_level="info")
 
 # --- Настройка FastAPI (только для Health Check и управления жизненным циклом) ---

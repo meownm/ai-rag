@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "embedding-backfill-worker"
+version = "0.1.0"
+description = "Background worker that backfills missing chunk embeddings using settings-stored model configuration."
+authors = ["AI RAG Team"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+psycopg2-binary = "^2.9.9"
+sentence-transformers = "^3.1.0"
+python-dotenv = "^1.0.1"
+requests = "^2.31.0"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.4.0"
+
+[build-system]
+requires = ["poetry-core>=1.8.2"]
+build-backend = "poetry.core.masonry.api"
