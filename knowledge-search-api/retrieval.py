@@ -217,7 +217,7 @@ def retrieve_dense(
 
     results = []
     with db_client.get_cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        cur.execute(sql_query, params + [query_embedding, top_k])
+        cur.execute(sql_query, [query_embedding] + params + [top_k])
         rows = cur.fetchall()
         for row in rows:
             results.append(InternalChunk(source_id=-1, **row))
