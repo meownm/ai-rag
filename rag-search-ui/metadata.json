@@ -1,0 +1,5 @@
+{
+  "name": "RAG Search UI",
+  "description": "A sophisticated frontend for a Retrieval-Augmented Generation (RAG) API. It provides a chat-like interface to query a knowledge base, view AI-generated answers with source citations, and manage conversation history.",
+  "requestFramePermissions": []
+}

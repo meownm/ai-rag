@@ -1,0 +1,1 @@
+{"title": "LangChain RAG (example)", "panels": [{"type": "timeseries", "title": "Retriever calls (req/min)", "targets": [{"expr": "sum(rate(retrieval_count[1m]))"}]}, {"type": "timeseries", "title": "Retriever latency p90", "targets": [{"expr": "histogram_quantile(0.9, sum(rate(retrieval_latency_seconds_bucket[5m])) by (le))"}]}], "schemaVersion": 38, "version": 1}

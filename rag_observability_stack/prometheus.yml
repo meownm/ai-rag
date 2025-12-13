@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 10s
+
+scrape_configs:
+  - job_name: 'fastapi-services'
+    metrics_path: /metrics
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        filters:
+          - name: label
+            values: ["service"]
+    relabel_configs:
+      - source_labels: [__meta_docker_container_label_service]
+        target_label: service
+      - source_labels: [__address__]
+        target_label: instance
+      - target_label: job
+        replacement: "fastapi-services"
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['prometheus:9090']

@@ -1,0 +1,1 @@
+{"title": "Observability System Overview", "panels": [{"type": "stat", "title": "Prometheus up", "targets": [{"expr": "up{job=\"prometheus\"}"}]}, {"type": "timeseries", "title": "Scrape samples/sec", "targets": [{"expr": "sum(rate(prometheus_engine_samples_total[1m]))"}]}], "schemaVersion": 38, "version": 1}

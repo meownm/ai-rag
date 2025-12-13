@@ -1,0 +1,1 @@
+{"title": "LLM Usage (Helicone)", "panels": [{"type": "graph", "title": "LLM calls per minute", "targets": [{"expr": "sum(rate(helicone_requests_total[1m]))"}]}, {"type": "graph", "title": "Average generation latency", "targets": [{"expr": "avg_over_time(helicone_latency_ms[5m])"}]}], "schemaVersion": 16, "version": 1}

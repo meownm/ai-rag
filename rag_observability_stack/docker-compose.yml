@@ -1,0 +1,59 @@
+version: "3.8"
+networks: { observability_net: { driver: bridge } }
+volumes: { prometheus_data: {}, grafana_data: {}, traces_data: {} }
+
+services:
+  phoenix:
+    image: arizeai/phoenix:latest
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+      PHOENIX_PORT: ${PHOENIX_PORT}
+      PHOENIX_PROJECT_NAME: "KnowledgeSearch"
+    ports: ["${PHOENIX_PORT}:6006"]
+    networks: [observability_net]
+    restart: unless-stopped
+
+  helicone:
+    image: helicone/helicone:latest
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+      PORT: ${HELICONE_PORT}
+      HELICONE_API_KEY: "${HELICONE_API_KEY}"
+    ports: ["${HELICONE_PORT}:8787"]
+    networks: [observability_net]
+    restart: unless-stopped
+
+  traceloop:
+    image: ghcr.io/traceloop/trace:latest
+    ports: ["${TRACELOOP_PORT}:7000"]
+    volumes: ["./traces:/data"]
+    networks: [observability_net]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports: ["${PROMETHEUS_PORT}:9090"]
+    networks: [observability_net]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    environment: { GF_SECURITY_ADMIN_PASSWORD: "admin" }
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    ports: ["${GRAFANA_PORT}:3000"]
+    networks: [observability_net]
+    restart: unless-stopped
+
+  nginx-proxy:
+    build: ./nginx
+    ports: ["${NGINX_PORT}:8080"]
+    depends_on: [grafana, phoenix, helicone, traceloop]
+    networks: [observability_net]
+    restart: unless-stopped
