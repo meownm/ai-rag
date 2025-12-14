@@ -67,6 +67,8 @@ class InternalChunk(RetrievedChunk):
     """
 
     type: Optional[str] = None
+    section: Optional[str] = None
+    block_type: Optional[str] = None
     metadata: Optional[Dict] = None
 
 
