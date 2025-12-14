@@ -58,6 +58,39 @@ class SmartChunker:
         """Считает количество токенов в тексте."""
         return len(self.enc.encode(text, disallowed_special=()))
 
+    def _split_to_sentences(self, text: str) -> List[str]:
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        if len(sentences) == 1:
+            sentences = text.split('\n')
+        return [s for s in sentences if s.strip()]
+
+    def _build_text_overlap(self, buffer: List[Tuple[int, Dict]]) -> List[Tuple[int, Dict]]:
+        """Собирает хвост буфера так, чтобы суммарное количество токенов не превышало overlap_tokens."""
+        overlap_sections: List[Tuple[int, Dict]] = []
+        accumulated_tokens = 0
+
+        for idx, sec in reversed(buffer):
+            if accumulated_tokens >= self.overlap_tokens:
+                break
+
+            sentences = self._split_to_sentences(sec["text"])
+            selected_sentences = []
+
+            for sentence in reversed(sentences):
+                sentence_tokens = self.count_tokens(sentence)
+                if selected_sentences and accumulated_tokens + sentence_tokens > self.overlap_tokens:
+                    break
+                selected_sentences.insert(0, sentence)
+                accumulated_tokens += sentence_tokens
+                if accumulated_tokens >= self.overlap_tokens:
+                    break
+
+            if selected_sentences:
+                overlap_text = " ".join(selected_sentences) if len(selected_sentences) > 1 else selected_sentences[0]
+                overlap_sections.insert(0, (idx, {**sec, "text": overlap_text}))
+
+        return overlap_sections
+
     def _split_large_text_block(self, text: str, meta: dict) -> List[Dict]:
         """
         Внутренняя функция для семантической нарезки одного очень большого блока текста.
@@ -66,11 +99,7 @@ class SmartChunker:
         if not text:
             return []
 
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        if len(sentences) == 1:
-            sentences = text.split('\n')
-        
-        sentences = [s for s in sentences if s.strip()]
+        sentences = self._split_to_sentences(text)
 
         chunks = []
         current_chunk_sentences = []
@@ -104,32 +133,63 @@ class SmartChunker:
 
         return chunks
 
+    def _build_overlap_items(self, items: List[str]) -> List[str]:
+        overlap_items: List[str] = []
+        accumulated_tokens = 0
+
+        for item in reversed(items):
+            item_tokens = self.count_tokens(item)
+            if overlap_items and accumulated_tokens + item_tokens > self.overlap_tokens:
+                break
+            overlap_items.insert(0, item)
+            accumulated_tokens += item_tokens
+            if accumulated_tokens >= self.overlap_tokens:
+                break
+
+        return overlap_items
+
     def _handle_list(self, text: str, meta: Dict) -> List[Dict]:
         """Обработка списков. Если список слишком длинный, он разбивается на части."""
         if self.count_tokens(text) <= self.list_limit:
             return [{"text": text, "meta": meta, "block_type": "list"}]
-        
+
         items = text.split("\n")
         block, res = [], []
         current_token_count = 0
-        
+
         for item in items:
             item_tokens = self.count_tokens(item)
             if block and current_token_count + item_tokens > self.chunk_tokens:
                 block_text = "\n".join(block)
                 res.append({"text": block_text, "meta": meta, "block_type": "list_part"})
-                overlap_items = [block[-1]] if self.overlap_tokens > 0 and block else []
+
+                overlap_items = self._build_overlap_items(block) if self.overlap_tokens > 0 else []
                 block = overlap_items
-                current_token_count = self.count_tokens("\n".join(overlap_items))
-            
+                current_token_count = sum(self.count_tokens(i) for i in overlap_items)
+
             block.append(item)
             current_token_count += item_tokens
 
         if block:
             block_text = "\n".join(block)
             res.append({"text": block_text, "meta": meta, "block_type": "list_part"})
-            
+
         return res
+
+    def _build_overlap_rows(self, rows: List[str], max_tokens: int) -> List[str]:
+        overlap_rows: List[str] = []
+        accumulated_tokens = 0
+
+        for row in reversed(rows):
+            row_tokens = self.count_tokens(row)
+            if overlap_rows and accumulated_tokens + row_tokens > max_tokens:
+                break
+            overlap_rows.insert(0, row)
+            accumulated_tokens += row_tokens
+            if accumulated_tokens >= max_tokens:
+                break
+
+        return overlap_rows
 
     def _handle_table(self, text: str, meta: Dict) -> List[Dict]:
         """
@@ -147,20 +207,22 @@ class SmartChunker:
         data_rows = rows[2:]
         res, current_block_rows = [], []
         header_token_count = self.count_tokens(header) + self.count_tokens(separator)
+        current_block_token_count = 0
 
         for row in data_rows:
             row_tokens = self.count_tokens(row)
-            current_block_token_count = self.count_tokens("\n".join(current_block_rows))
 
             if current_block_rows and header_token_count + current_block_token_count + row_tokens > self.chunk_tokens:
                 block_text = "\n".join([header, separator] + current_block_rows)
                 res.append({"text": block_text, "meta": meta, "block_type": "table_part"})
-                
-                overlap_row_count = max(1, len(current_block_rows) // 10) if self.overlap_tokens > 0 else 0
-                current_block_rows = current_block_rows[-overlap_row_count:] if overlap_row_count > 0 else []
+
+                overlap_rows = self._build_overlap_rows(current_block_rows, self.overlap_tokens) if self.overlap_tokens > 0 else []
+                current_block_rows = overlap_rows
+                current_block_token_count = sum(self.count_tokens(r) for r in current_block_rows)
 
             current_block_rows.append(row)
-        
+            current_block_token_count += row_tokens
+
         if current_block_rows:
             block_text = "\n".join([header, separator] + current_block_rows)
             res.append({"text": block_text, "meta": meta, "block_type": "table_part"})
@@ -177,7 +239,7 @@ class SmartChunker:
         3. Обычные текстовые блоки (параграфы, заголовки) накапливаются в `buffer`.
         4. Как только добавление нового блока в буфер превышает целевой размер чанка (`chunk_tokens`),
            содержимое буфера объединяется в один "композитный" чанк.
-        5. Для обеспечения контекста, последний добавленный блок остается в буфере, формируя "семантическое перекрытие".
+        5. Для обеспечения контекста сохраняется хвост предыдущего чанка нужной длины (по токенам), формируя "семантическое перекрытие".
         6. Очень большие блоки (> `section_limit`) обрабатываются отдельно функцией нарезки по предложениям.
         """
         total_text = "\n\n".join(sec["text"] for sec in sections if sec.get("text"))
@@ -189,7 +251,8 @@ class SmartChunker:
             return [{"text": total_text, "meta": combined_meta, "block_type": "doc"}]
 
         chunks = []
-        buffer = []
+        buffer: List[Tuple[int, Dict]] = []
+        buffer_tokens = 0
 
         for idx, sec in enumerate(sections):
             sec_text = sec.get("text", "").strip()
@@ -224,10 +287,10 @@ class SmartChunker:
                 combined_meta = self._build_combined_meta(buffer)
                 chunks.append({"text": chunk_text, "meta": combined_meta, "block_type": "composite_section"})
 
-                buffer = [buffer[-1]]
+                buffer = self._build_text_overlap(buffer) if self.overlap_tokens > 0 else []
 
             buffer.append((idx, sec))
-
+            
         if buffer:
             chunk_text = "\n\n".join(b[1]['text'] for b in buffer)
             combined_meta = self._build_combined_meta(buffer)
