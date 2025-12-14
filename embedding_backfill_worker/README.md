@@ -1,6 +1,6 @@
 # Embedding Backfill Worker
 
-Этот воркер периодически просматривает таблицу `chunks` и достраивает эмбеддинги для всех записей, у которых `embedding` отсутствует или версия эмбеддинга меньше значения из `settings.embedding_config`.
+Этот воркер периодически просматривает таблицу `chunks` и достраивает эмбеддинги для всех записей, у которых `embedding` отсутствует или версия эмбеддинга меньше значения из `settings.embedding_config`. Статус в поле `enrichment_status.embedding_generation.status` сохраняется в верхнем регистре (`COMPLETED`/`FAILED`), чтобы быть совместимым с пайплайнами индексации и поисковыми фильтрами.
 
 ## Настройки
 - **DB подключения**: через `POSTGRES_DSN`/`DATABASE_DSN` или набор переменных `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`.

@@ -67,7 +67,7 @@ def test_build_filter_clause_with_doc_ids_and_filters():
 def test_build_indexing_guard_appends_readiness_checks():
     clause, params = _build_indexing_guard("WHERE c.doc_id = ANY(%s)", ["doc1"], embedding_version=2)
     assert "c.embedding IS NOT NULL" in clause
-    assert "lower(coalesce(c.enrichment_status->'embedding_generation'->>'status','')) = 'completed'" in clause
+    assert "upper(coalesce(c.enrichment_status->'embedding_generation'->>'status','')) = 'COMPLETED'" in clause
     assert clause.endswith("c.embedding_version = %s")
     assert params == ["doc1", 2]
 
