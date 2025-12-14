@@ -143,15 +143,17 @@ class DatabaseClient:
                     
                     chunk_data_tuples = [
                         (
-                            c['doc_id'], c['chunk_id'], c['tenant_id'], 
-                            c['text'], json.dumps(c.get('metadata', {}), ensure_ascii=False), 
+                            c['doc_id'], c['chunk_id'], c['tenant_id'],
+                            c.get('section'), c.get('type'), c.get('block_type'),
+                            c['text'], json.dumps(c.get('metadata', {}), ensure_ascii=False),
                             json.dumps(initial_status)
-                        ) 
+                        )
                         for c in chunks
                     ]
-                    
-                    psycopg2.extras.execute_values(cur, 
-                        "INSERT INTO chunks (doc_id, chunk_id, tenant_id, text, metadata, enrichment_status) VALUES %s;", 
+
+                    psycopg2.extras.execute_values(
+                        cur,
+                        "INSERT INTO chunks (doc_id, chunk_id, tenant_id, section, type, block_type, text, metadata, enrichment_status) VALUES %s;",
                         chunk_data_tuples
                     )
                 

@@ -83,6 +83,9 @@ def initialize_database_schema(conn):
                 chunk_id INT NOT NULL,
                 tenant_id UUID NOT NULL,
                 text TEXT NOT NULL,
+                section TEXT,
+                type TEXT,
+                block_type TEXT,
                 embedding vector(2048),
                 text_tsv TSVECTOR,
                 metadata JSONB DEFAULT '{}'::jsonb,
@@ -97,6 +100,9 @@ def initialize_database_schema(conn):
         cur.execute("COMMENT ON COLUMN chunks.doc_id IS 'Внешний ключ, связывающий чанк с документом.';")
         cur.execute("COMMENT ON COLUMN chunks.chunk_id IS 'Порядковый номер чанка внутри документа.';")
         cur.execute("COMMENT ON COLUMN chunks.text IS 'Текстовое содержимое чанка.';")
+        cur.execute("COMMENT ON COLUMN chunks.section IS 'Раздел/идентификатор исходного блока (например, таблицы).';")
+        cur.execute("COMMENT ON COLUMN chunks.type IS 'Исходный тип блока после парсинга (paragraph, table, slide и т.д.).';")
+        cur.execute("COMMENT ON COLUMN chunks.block_type IS 'Тип сгенерированного чанка после нарезки (table_part, composite_section и т.д.).';")
         cur.execute("COMMENT ON COLUMN chunks.embedding IS 'Векторное представление (эмбеддинг) текста чанка.';")
         cur.execute("COMMENT ON COLUMN chunks.text_tsv IS 'Предварительно рассчитанный tsvector для полнотекстового поиска.';")
         cur.execute("COMMENT ON COLUMN chunks.metadata IS 'Дополнительные метаданные чанка (контекст, результаты LLM-обогащения).';")
@@ -110,10 +116,24 @@ def initialize_database_schema(conn):
                                WHERE table_name='chunks' AND column_name='embedding_version') THEN
                     ALTER TABLE chunks ADD COLUMN embedding_version INT DEFAULT 1 NOT NULL;
                 END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name='chunks' AND column_name='section') THEN
+                    ALTER TABLE chunks ADD COLUMN section TEXT;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name='chunks' AND column_name='type') THEN
+                    ALTER TABLE chunks ADD COLUMN type TEXT;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name='chunks' AND column_name='block_type') THEN
+                    ALTER TABLE chunks ADD COLUMN block_type TEXT;
+                END IF;
             END $$;
         """)
 
         cur.execute("CREATE INDEX IF NOT EXISTS ix_chunks_tenant_id ON chunks (tenant_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS ix_chunks_section ON chunks (section);")
+        cur.execute("CREATE INDEX IF NOT EXISTS ix_chunks_block_type ON chunks (block_type);")
         cur.execute("CREATE INDEX IF NOT EXISTS chunks_text_tsv_idx ON chunks USING GIN(text_tsv);")
         logging.info(" -> Индексы для 'chunks' готовы.")
 

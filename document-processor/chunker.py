@@ -3,6 +3,7 @@
 # Версия 3.6: Добавлено детальное комментирование алгоритмов.
 # --------------------------------------------------------------------------
 
+import hashlib
 import tiktoken
 import logging
 from typing import List, Dict, Iterable, Tuple
@@ -20,6 +21,8 @@ class SmartChunker:
                  doc_limit: int = 3000,
                  list_limit: int = 1500,
                  table_limit: int = 2000,
+                 table_row_group_tokens: int = 0,
+                 table_row_overlap: int = 0,
                  encoding: str = "cl100k_base"):
         
         self.chunk_tokens = chunk_tokens
@@ -28,6 +31,8 @@ class SmartChunker:
         self.doc_limit = doc_limit
         self.list_limit = list_limit
         self.table_limit = table_limit
+        self.table_row_group_tokens = table_row_group_tokens
+        self.table_row_overlap = table_row_overlap
         
         try:
             self.enc = tiktoken.get_encoding(encoding)
@@ -246,7 +251,7 @@ class SmartChunker:
 
         return res
 
-    def _build_overlap_rows(self, rows: List[str], max_tokens: int) -> List[str]:
+    def _build_overlap_rows_by_tokens(self, rows: List[str], max_tokens: int) -> List[str]:
         overlap_rows: List[str] = []
         accumulated_tokens = 0
 
@@ -261,32 +266,56 @@ class SmartChunker:
 
         return overlap_rows
 
+    def _build_table_overlap_rows(self, rows: List[str]) -> List[str]:
+        if self.table_row_overlap > 0:
+            return rows[-self.table_row_overlap:]
+        if self.overlap_tokens > 0:
+            return self._build_overlap_rows_by_tokens(rows, self.overlap_tokens)
+        return []
+
     def _handle_table(self, text: str, meta: Dict) -> List[Dict]:
         """
         Обработка таблиц в формате Markdown.
         Если таблица слишком длинная, она разбивается на части, сохраняя заголовок.
+        Поддерживается группировка строк по количеству токенов и отдельная настройка
+        перекрытия по строкам для сохранения контекста.
         """
-        if self.count_tokens(text) <= self.table_limit:
-            return [{"text": text, "meta": meta, "block_type": "table"}]
-
         rows = text.split("\n")
         if len(rows) < 2:
             return self._split_large_text_block(text, meta)
 
         header, separator = rows[0], rows[1]
         data_rows = rows[2:]
-        res, current_block_rows = [], []
         header_token_count = self.count_tokens(header) + self.count_tokens(separator)
+        total_tokens = self.count_tokens(text)
+
+        meta_with_section = {**meta}
+        table_section = meta_with_section.get("section") or meta_with_section.get("table_id") or meta_with_section.get("caption")
+        if not table_section:
+            digest = hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:8]
+            table_section = f"table_{digest}"
+        meta_with_section["section"] = table_section
+
+        row_group_limit = self.table_row_group_tokens or (self.chunk_tokens - header_token_count)
+        if row_group_limit <= 0:
+            row_group_limit = max(self.chunk_tokens, 1)
+
+        effective_group_limit = min(row_group_limit, max(self.chunk_tokens - header_token_count, 1))
+
+        if total_tokens <= self.table_limit and total_tokens <= header_token_count + effective_group_limit:
+            return [{"text": text, "meta": meta_with_section, "block_type": "table"}]
+
+        res, current_block_rows = [], []
         current_block_token_count = 0
 
         for row in data_rows:
             row_tokens = self.count_tokens(row)
 
-            if current_block_rows and header_token_count + current_block_token_count + row_tokens > self.chunk_tokens:
+            if current_block_rows and current_block_token_count + row_tokens > effective_group_limit:
                 block_text = "\n".join([header, separator] + current_block_rows)
-                res.append({"text": block_text, "meta": meta, "block_type": "table_part"})
+                res.append({"text": block_text, "meta": meta_with_section, "block_type": "table_part"})
 
-                overlap_rows = self._build_overlap_rows(current_block_rows, self.overlap_tokens) if self.overlap_tokens > 0 else []
+                overlap_rows = self._build_table_overlap_rows(current_block_rows)
                 current_block_rows = overlap_rows
                 current_block_token_count = sum(self.count_tokens(r) for r in current_block_rows)
 
@@ -295,7 +324,7 @@ class SmartChunker:
 
         if current_block_rows:
             block_text = "\n".join([header, separator] + current_block_rows)
-            res.append({"text": block_text, "meta": meta, "block_type": "table_part"})
+            res.append({"text": block_text, "meta": meta_with_section, "block_type": "table_part"})
 
         return res
 
