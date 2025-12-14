@@ -39,6 +39,21 @@ class SmartChunker:
         """Считает количество токенов в тексте."""
         return len(self.enc.encode(text, disallowed_special=()))
 
+    def _combine_sections_metadata(self, sections: List[Dict]) -> Dict:
+        """
+        Собирает метаданные всех секций без потери информации.
+
+        Ранее метаданные объединялись простым update()/comprehension, что приводило к
+        перезаписи одинаковых ключей (например, заголовков разделов). Теперь каждая
+        секция сохраняется отдельно в sections_meta с указанием порядка.
+        """
+        sections_meta = []
+        for idx, sec in enumerate(sections, start=1):
+            meta = sec.get("meta", {}) or {}
+            sections_meta.append({"section_index": idx, **meta})
+
+        return {"sections_meta": sections_meta} if sections_meta else {}
+
     def _split_large_text_block(self, text: str, meta: dict) -> List[Dict]:
         """
         Внутренняя функция для семантической нарезки одного очень большого блока текста.
@@ -164,11 +179,9 @@ class SmartChunker:
         total_text = "\n\n".join(sec["text"] for sec in sections if sec.get("text"))
         if self.count_tokens(total_text) <= self.doc_limit:
             logging.info(f"Документ достаточно мал ({self.count_tokens(total_text)} токенов), возвращается как единый чанк.")
-            combined_meta = {}
-            for sec in sections:
-                combined_meta.update(sec.get("meta", {}))
+            combined_meta = self._combine_sections_metadata(sections)
             combined_meta["is_whole_doc"] = True
-            
+
             return [{"text": total_text, "meta": combined_meta, "block_type": "doc"}]
 
         chunks = []
@@ -194,7 +207,7 @@ class SmartChunker:
             if sec_tokens > self.section_limit:
                 if buffer:
                     chunk_text = "\n\n".join(b['text'] for b in buffer)
-                    combined_meta = {k: v for b in buffer for k, v in b['meta'].items()}
+                    combined_meta = self._combine_sections_metadata(buffer)
                     chunks.append({"text": chunk_text, "meta": combined_meta, "block_type": "composite_section"})
                     buffer = []
                 
@@ -204,16 +217,16 @@ class SmartChunker:
             buffer_tokens = self.count_tokens("\n\n".join(b['text'] for b in buffer))
             if buffer_tokens > 0 and buffer_tokens + sec_tokens > self.chunk_tokens:
                 chunk_text = "\n\n".join(b['text'] for b in buffer)
-                combined_meta = {k: v for b in buffer for k, v in b['meta'].items()}
+                combined_meta = self._combine_sections_metadata(buffer)
                 chunks.append({"text": chunk_text, "meta": combined_meta, "block_type": "composite_section"})
-                
+
                 buffer = [buffer[-1]]
 
             buffer.append(sec)
 
         if buffer:
             chunk_text = "\n\n".join(b['text'] for b in buffer)
-            combined_meta = {k: v for b in buffer for k, v in b['meta'].items()}
+            combined_meta = self._combine_sections_metadata(buffer)
             chunks.append({"text": chunk_text, "meta": combined_meta, "block_type": "composite_section"})
 
         logging.info(f"Документ разбит на {len(chunks)} 'умных' объединенных чанков.")
