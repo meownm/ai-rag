@@ -1,0 +1,27 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: kb_test
+      POSTGRES_PASSWORD: kb_test
+      POSTGRES_DB: knowledge_base_test
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: start-dev --http-port 8080 --hostname-strict=false
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
