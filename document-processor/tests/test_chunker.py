@@ -101,3 +101,31 @@ def test_text_overlap_between_chunks(monkeypatch):
     assert sections[0]["text"] == first_chunk_text
     assert sections[0]["text"] in second_chunk_text
     assert sections[1]["text"] in second_chunk_text
+
+
+def test_split_document_limits_token_recounts(monkeypatch):
+    class DummyEncoder:
+        def encode(self, text: str, disallowed_special=()):
+            return text.split()
+
+    call_count = 0
+
+    def fake_count_tokens(self, text: str):
+        nonlocal call_count
+        call_count += 1
+        return len(text.split())
+
+    monkeypatch.setattr("chunker.tiktoken.get_encoding", lambda name: DummyEncoder())
+    monkeypatch.setattr(SmartChunker, "count_tokens", fake_count_tokens)
+
+    chunker = SmartChunker(chunk_tokens=5, overlap_tokens=2, doc_limit=0, encoding="gpt2")
+    sections = [
+        {"text": f"раздел {i}", "meta": {"type": "paragraph"}}
+        for i in range(50)
+    ]
+
+    chunks = chunker.split_document(sections)
+
+    assert chunks  # убедимся, что разбиение выполнено
+    # должно быть не больше нескольких вызовов на секцию + базовые проверки документа
+    assert call_count <= len(sections) + 10
