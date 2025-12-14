@@ -101,3 +101,30 @@ def test_text_overlap_between_chunks(monkeypatch):
     assert sections[0]["text"] == first_chunk_text
     assert sections[0]["text"] in second_chunk_text
     assert sections[1]["text"] in second_chunk_text
+
+
+def test_text_overlap_respects_token_limit(monkeypatch):
+    class DummyEncoder:
+        def encode(self, text: str, disallowed_special=()):
+            return text.split()
+
+    monkeypatch.setattr("chunker.tiktoken.get_encoding", lambda name: DummyEncoder())
+
+    chunker = SmartChunker(chunk_tokens=6, overlap_tokens=3, doc_limit=0, encoding="gpt2")
+    chunker.enc = DummyEncoder()
+
+    sections = [
+        {"text": "Первый короткий абзац", "meta": {}},
+        {"text": "Второй абзац ещё короче", "meta": {}},
+    ]
+
+    chunks = chunker.split_document(sections)
+
+    assert len(chunks) == 2
+
+    first_chunk_text = chunks[0]["text"]
+    second_chunk_text = chunks[1]["text"]
+
+    assert first_chunk_text == sections[0]["text"]
+    assert sections[0]["text"] in second_chunk_text
+    assert sections[1]["text"] in second_chunk_text
