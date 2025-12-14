@@ -94,6 +94,9 @@ def _post_process_chunks(db_client: PostgreSQLClient, chunks: List[InternalChunk
     for chunk in chunks:
         is_table_fragment = chunk.type in ['table_part', 'table_row', 'table_cell']
         if is_table_fragment:
+            if not chunk.section:
+                final_blocks.append(chunk)
+                continue
             table_key = (chunk.doc_id, chunk.section)
             if table_key not in processed_objects:
                 full_table_text = _find_and_reconstruct_table(db_client, chunk)
@@ -113,7 +116,7 @@ def retrieve_dense(db_client: PostgreSQLClient, embedding_model: SentenceTransfo
     filter_clause, params = _build_filter_clause(filters, allowed_doc_ids)
     
     sql_query = f"""
-        SELECT c.doc_id, c.chunk_id, c.text, d.filename, c.metadata, c.type, c.block_type,
+        SELECT c.doc_id, c.chunk_id, c.text, c.section, d.filename, c.metadata, c.type, c.block_type,
                1 - (c.embedding::vector <=> %s::vector) AS score
         FROM chunks c JOIN documents d ON c.doc_id = d.doc_id
         {filter_clause} ORDER BY score DESC LIMIT %s;
@@ -144,7 +147,7 @@ def retrieve_bm25(db_client: PostgreSQLClient, query: str, top_k: int, filters: 
     where_conjunction = "AND" if filter_clause else "WHERE"
     
     sql_query = f"""
-        SELECT c.doc_id, c.chunk_id, c.text, d.filename, c.metadata, c.type, c.block_type,
+        SELECT c.doc_id, c.chunk_id, c.text, c.section, d.filename, c.metadata, c.type, c.block_type,
                ts_rank(c.text_tsv, to_tsquery('russian', %s)) as score
         FROM chunks c JOIN documents d ON c.doc_id = d.doc_id
         {filter_clause} {where_conjunction} c.text_tsv @@ to_tsquery('russian', %s)
