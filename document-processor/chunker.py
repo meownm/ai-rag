@@ -58,38 +58,20 @@ class SmartChunker:
         """Считает количество токенов в тексте."""
         return len(self.enc.encode(text, disallowed_special=()))
 
-    def _split_to_sentences(self, text: str) -> List[str]:
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        if len(sentences) == 1:
-            sentences = text.split('\n')
-        return [s for s in sentences if s.strip()]
+    def _combine_sections_metadata(self, sections: List[Dict]) -> Dict:
+        """
+        Собирает метаданные всех секций без потери информации.
 
-    def _build_text_overlap(self, buffer: List[Tuple[int, Dict]]) -> List[Tuple[int, Dict]]:
-        """Собирает хвост буфера так, чтобы суммарное количество токенов не превышало overlap_tokens."""
-        overlap_sections: List[Tuple[int, Dict]] = []
-        accumulated_tokens = 0
+        Ранее метаданные объединялись простым update()/comprehension, что приводило к
+        перезаписи одинаковых ключей (например, заголовков разделов). Теперь каждая
+        секция сохраняется отдельно в sections_meta с указанием порядка.
+        """
+        sections_meta = []
+        for idx, sec in enumerate(sections, start=1):
+            meta = sec.get("meta", {}) or {}
+            sections_meta.append({"section_index": idx, **meta})
 
-        for idx, sec in reversed(buffer):
-            if accumulated_tokens >= self.overlap_tokens:
-                break
-
-            sentences = self._split_to_sentences(sec["text"])
-            selected_sentences = []
-
-            for sentence in reversed(sentences):
-                sentence_tokens = self.count_tokens(sentence)
-                if selected_sentences and accumulated_tokens + sentence_tokens > self.overlap_tokens:
-                    break
-                selected_sentences.insert(0, sentence)
-                accumulated_tokens += sentence_tokens
-                if accumulated_tokens >= self.overlap_tokens:
-                    break
-
-            if selected_sentences:
-                overlap_text = " ".join(selected_sentences) if len(selected_sentences) > 1 else selected_sentences[0]
-                overlap_sections.insert(0, (idx, {**sec, "text": overlap_text}))
-
-        return overlap_sections
+        return {"sections_meta": sections_meta} if sections_meta else {}
 
     def _split_large_text_block(self, text: str, meta: dict) -> List[Dict]:
         """
