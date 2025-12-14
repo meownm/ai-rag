@@ -184,7 +184,7 @@ class EmbeddingBackfillWorker:
     def _mark_failed(self, conn, batch: List[Dict[str, Any]], config: EmbeddingConfig, error: str) -> None:
         failed_status = json.dumps(
             {
-                "status": "failed",
+                "status": "FAILED",
                 "processor": self.worker_id,
                 "model": config.model_name,
                 "error": error,
@@ -206,7 +206,7 @@ class EmbeddingBackfillWorker:
     def _save_embeddings(self, conn, batch: List[Dict[str, Any]], embeddings: List[List[float]], config: EmbeddingConfig) -> None:
         completed_status = json.dumps(
             {
-                "status": "completed",
+                "status": "COMPLETED",
                 "processor": self.worker_id,
                 "model": config.model_name,
                 "completed_at": time.time(),
