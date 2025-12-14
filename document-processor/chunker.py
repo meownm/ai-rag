@@ -81,39 +81,127 @@ class SmartChunker:
         if not text:
             return []
 
-        sentences = self._split_to_sentences(text)
+        paragraphs = self._split_to_logical_blocks(text)
 
         chunks = []
-        current_chunk_sentences = []
+        current_chunk_sentences: List[str] = []
         current_token_count = 0
 
-        for sentence in sentences:
-            sentence_token_count = self.count_tokens(sentence)
+        for paragraph in paragraphs:
+            paragraph_sentences = self._split_to_sentences(paragraph)
+            if not paragraph_sentences:
+                continue
 
-            if current_chunk_sentences and current_token_count + sentence_token_count > self.chunk_tokens:
+            paragraph_text = " ".join(paragraph_sentences)
+            paragraph_tokens = self.count_tokens(paragraph_text)
+
+            if paragraph_tokens > self.chunk_tokens:
+                if current_chunk_sentences:
+                    chunk_text = " ".join(current_chunk_sentences)
+                    chunks.append({"text": chunk_text, "meta": meta, "block_type": "section_part"})
+                    current_chunk_sentences, current_token_count = self._build_sentence_overlap(current_chunk_sentences)
+
+                for sentence in paragraph_sentences:
+                    sentence_token_count = self.count_tokens(sentence)
+
+                    if current_chunk_sentences and current_token_count + sentence_token_count > self.chunk_tokens:
+                        chunk_text = " ".join(current_chunk_sentences)
+                        chunks.append({"text": chunk_text, "meta": meta, "block_type": "section_part"})
+                        current_chunk_sentences, current_token_count = self._build_sentence_overlap(current_chunk_sentences)
+
+                    current_chunk_sentences.append(sentence)
+                    current_token_count += sentence_token_count
+
+                continue
+
+            if current_chunk_sentences and current_token_count + paragraph_tokens > self.chunk_tokens:
                 chunk_text = " ".join(current_chunk_sentences)
                 chunks.append({"text": chunk_text, "meta": meta, "block_type": "section_part"})
+                current_chunk_sentences, current_token_count = self._build_sentence_overlap(current_chunk_sentences)
 
-                overlap_sentences = []
-                overlap_token_count = 0
-                for s in reversed(current_chunk_sentences):
-                    s_tokens = self.count_tokens(s)
-                    if overlap_token_count + s_tokens > self.overlap_tokens:
-                        break
-                    overlap_sentences.insert(0, s)
-                    overlap_token_count += s_tokens
-                
-                current_chunk_sentences = overlap_sentences
-                current_token_count = overlap_token_count
+            current_chunk_sentences.extend(paragraph_sentences)
+            current_token_count += paragraph_tokens
 
-            current_chunk_sentences.append(sentence)
-            current_token_count += sentence_token_count
-        
         if current_chunk_sentences:
             chunk_text = " ".join(current_chunk_sentences)
             chunks.append({"text": chunk_text, "meta": meta, "block_type": "section_part"})
 
         return chunks
+
+    def _build_sentence_overlap(self, sentences: List[str]) -> Tuple[List[str], int]:
+        if self.overlap_tokens <= 0:
+            return [], 0
+
+        overlap_sentences: List[str] = []
+        overlap_token_count = 0
+
+        for s in reversed(sentences):
+            s_tokens = self.count_tokens(s)
+            if overlap_sentences and overlap_token_count + s_tokens > self.overlap_tokens:
+                break
+            overlap_sentences.insert(0, s)
+            overlap_token_count += s_tokens
+            if overlap_token_count >= self.overlap_tokens:
+                break
+
+        return overlap_sentences, overlap_token_count
+
+    def _split_to_logical_blocks(self, text: str) -> List[str]:
+        lines = text.split("\n")
+        blocks: List[str] = []
+        current_block: List[str] = []
+
+        bullet_pattern = re.compile(r"^\s*([-*+•·]|\d+[\.|\)])\s+")
+        heading_pattern = re.compile(r"^\s{0,3}(#{1,6}\s+.+|.+?:)$")
+        potential_list_context = False
+
+        def flush_block():
+            nonlocal potential_list_context
+            if current_block:
+                blocks.append(" ".join(line.strip() for line in current_block if line.strip()))
+                current_block.clear()
+            potential_list_context = False
+
+        for line in lines:
+            stripped = line.strip()
+
+            if not stripped:
+                flush_block()
+                continue
+
+            is_bullet = bool(bullet_pattern.match(stripped))
+            is_heading = bool(heading_pattern.match(stripped))
+
+            if is_bullet or is_heading:
+                flush_block()
+                current_block.append(stripped)
+                flush_block()
+                potential_list_context = is_heading and stripped.endswith(":")
+                continue
+
+            if potential_list_context and len(stripped.split()) <= 10:
+                flush_block()
+                blocks.append(stripped)
+                continue
+
+            current_block.append(stripped)
+
+        flush_block()
+        return [block for block in blocks if block]
+
+    def _split_to_sentences(self, text: str) -> List[str]:
+        normalized = re.sub(r"\s+", " ", text.strip())
+        if not normalized:
+            return []
+
+        # Делим по завершенным предложениям, оставляя заглавные буквы как сигнал нового блока
+        raw_sentences = re.split(r"(?<=[.!?…])\s+(?=[A-ZА-ЯЁ0-9])", normalized)
+        sentences = [sent.strip() for sent in raw_sentences if sent.strip()]
+
+        if not sentences:
+            return [normalized]
+
+        return sentences
 
     def _build_overlap_items(self, items: List[str]) -> List[str]:
         overlap_items: List[str] = []
