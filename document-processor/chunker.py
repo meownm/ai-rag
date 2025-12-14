@@ -224,23 +224,22 @@ class SmartChunker:
         return overlap_items
 
     def _build_text_overlap(self, buffer: List[Tuple[int, Dict]]) -> List[Tuple[int, Dict]]:
-        if self.overlap_tokens <= 0:
-            return []
+        """
+        Формирует хвост буфера для перекрытия чанков по количеству токенов.
 
+        Возвращает список кортежей (index, section) в исходном порядке, суммарная
+        длина текстов которых не превышает `overlap_tokens` (если первый элемент
+        уже превышает лимит, он включается целиком).
+        """
         overlap_buffer: List[Tuple[int, Dict]] = []
         accumulated_tokens = 0
 
         for idx, sec in reversed(buffer):
-            sec_text = sec.get("text", "")
-            addition_text = f"\n\n{sec_text}" if overlap_buffer else sec_text
-            addition_tokens = self.count_tokens(addition_text)
-
-            if overlap_buffer and accumulated_tokens + addition_tokens > self.overlap_tokens:
+            sec_tokens = self.count_tokens(sec.get("text", ""))
+            if overlap_buffer and accumulated_tokens + sec_tokens > self.overlap_tokens:
                 break
-
             overlap_buffer.insert(0, (idx, sec))
-            accumulated_tokens += addition_tokens
-
+            accumulated_tokens += sec_tokens
             if accumulated_tokens >= self.overlap_tokens:
                 break
 
