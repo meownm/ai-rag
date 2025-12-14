@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     initial_admin_username: str = "admin"
     initial_admin_password: str = "admin123"
     initial_tenant_name: str = "Default Tenant"
+    require_authentication: bool = True
 
     class Config:
         env_file = ".env"
@@ -49,6 +50,7 @@ s3_session = aioboto3.Session()
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
 _jwks_cache: Optional[dict] = None
 _jwks_cached_at: Optional[datetime.datetime] = None
@@ -182,9 +184,29 @@ async def get_or_create_tenant(db: AsyncSession, name: str) -> Tenant:
     return tenant
 
 
+async def get_default_user(db: AsyncSession) -> User:
+    tenant = await get_or_create_tenant(db, settings.initial_tenant_name)
+    result = await db.execute(select(User).where(User.username == settings.initial_admin_username))
+    user = result.scalars().first()
+    if user:
+        return user
+
+    user = User(
+        username=settings.initial_admin_username,
+        hashed_password=None,
+        role=UserRole.ADMIN,
+        tenant_id=tenant.id,
+        idp_subject=settings.initial_admin_username,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
 async def get_current_user(
     request: Request,
-    token: Annotated[str, Depends(oauth2_scheme)],
+    token: Annotated[Optional[str], Depends(oauth2_scheme_optional)],
     db: AsyncSession = Depends(get_db),
 ) -> User:
     credentials_exception = HTTPException(
@@ -192,6 +214,12 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+    if not settings.require_authentication:
+        return await get_default_user(db)
+
+    if not token:
+        raise credentials_exception
 
     claims = getattr(request.state, "oidc_claims", None)
     if not claims:
