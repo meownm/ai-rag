@@ -64,12 +64,12 @@ def test_build_filter_clause_with_doc_ids_and_filters():
     assert params == [["doc1", "doc2"], ("Ivan",), "%.pdf", "%.doc"]
 
 
-    def test_build_indexing_guard_appends_readiness_checks():
-        clause, params = _build_indexing_guard("WHERE c.doc_id = ANY(%s)", ["doc1"], embedding_version=2)
-        assert "c.embedding IS NOT NULL" in clause
-        assert "upper(coalesce(c.enrichment_status->'embedding_generation'->>'status','')) = 'COMPLETED'" in clause
-        assert clause.endswith("c.embedding_version = %s")
-        assert params == ["doc1", 2]
+def test_build_indexing_guard_appends_readiness_checks():
+    clause, params = _build_indexing_guard("WHERE c.doc_id = ANY(%s)", ["doc1"], embedding_version=2)
+    assert "c.embedding IS NOT NULL" in clause
+    assert "upper(coalesce(c.enrichment_status->'embedding_generation'->>'status','')) = 'COMPLETED'" in clause
+    assert clause.endswith("c.embedding_version = %s")
+    assert params == ["doc1", 2]
 
     empty_clause, empty_params = _build_indexing_guard("", [], embedding_version=None)
     assert empty_clause.startswith("WHERE ")
