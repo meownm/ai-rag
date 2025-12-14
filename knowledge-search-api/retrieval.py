@@ -66,7 +66,7 @@ def _rerank_results(reranker_model: Optional[CrossEncoder], query: str, chunks: 
     return sorted(chunks, key=lambda c: c.score, reverse=True)[:top_k]
 
 def _find_and_reconstruct_table(db_client: PostgreSQLClient, chunk: InternalChunk) -> str:
-    sql = "SELECT text, type FROM chunks WHERE doc_id = %s AND section = %s AND (type LIKE 'table%%' OR block_type LIKE 'table%%') ORDER BY chunk_id;"
+    sql = "SELECT text, type, block_type FROM chunks WHERE doc_id = %s AND section = %s AND (type LIKE 'table%%' OR block_type LIKE 'table%%') ORDER BY chunk_id;"
     
     with db_client.get_cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         cur.execute(sql, (chunk.doc_id, chunk.section))
@@ -84,6 +84,30 @@ def _find_and_reconstruct_table(db_client: PostgreSQLClient, chunk: InternalChun
                 return md_table
             except IndexError:
                 return "\n".join([row['text'] for row in rows])
+        elif any((r.get('block_type') or '').startswith('table') for r in rows):
+            combined_lines = []
+            seen_data_rows = set()
+
+            for row in rows:
+                lines = row['text'].split("\n") if row['text'] else []
+                if not lines:
+                    continue
+
+                header = lines[0]
+                separator = lines[1] if len(lines) > 1 else None
+                data_lines = lines[2:] if len(lines) > 2 else []
+
+                if not combined_lines:
+                    combined_lines.append(header)
+                    if separator:
+                        combined_lines.append(separator)
+
+                for data_line in data_lines:
+                    if data_line not in seen_data_rows:
+                        combined_lines.append(data_line)
+                        seen_data_rows.add(data_line)
+
+            return "\n".join(combined_lines) if combined_lines else chunk.text
         else:
             return "\n".join([row['text'] for row in rows])
 

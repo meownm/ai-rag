@@ -209,18 +209,37 @@ def process_and_save_file(db: DatabaseClient, minio: MinioClient, neo4j: Optiona
             'overlap_tokens': int(os.getenv('CHUNKER_OVERLAP_TOKENS', 80)),
             'section_limit': int(os.getenv('CHUNKER_SECTION_LIMIT', 2000)),
             'table_limit': int(os.getenv('CHUNKER_TABLE_LIMIT', 2000)),
+            'table_row_group_tokens': int(os.getenv('CHUNKER_TABLE_ROW_GROUP_TOKENS', 0)),
+            'table_row_overlap': int(os.getenv('CHUNKER_TABLE_ROW_OVERLAP', 0)),
             'list_limit': int(os.getenv('CHUNKER_LIST_LIMIT', 1500)),
             'doc_limit': int(os.getenv('CHUNKER_DOC_LIMIT', 3000)),
         }
         chunker = SmartChunker(**chunker_config)
-        
-        smart_chunker_input = [{"text": b['text'], "meta": {**b.get('metadata', {}), 'type': b.get('type', 'paragraph')}} for b in final_blocks]
+
+        smart_chunker_input = [{
+            "text": b['text'],
+            "meta": {
+                **b.get('metadata', {}),
+                'type': b.get('type', 'paragraph'),
+                'section': b.get('section'),
+                'caption': b.get('caption'),
+            }
+        } for b in final_blocks]
         smart_chunks = chunker.split_document(smart_chunker_input)
 
         if not smart_chunks:
             return "Документ не содержит достаточно контента для создания чанков."
 
-        final_chunks = [{'doc_id': doc_id, 'chunk_id': i + 1, 'tenant_id': tenant_id, 'text': sc['text'], 'metadata': sc.get('meta', {})} for i, sc in enumerate(smart_chunks)]
+        final_chunks = [{
+            'doc_id': doc_id,
+            'chunk_id': i + 1,
+            'tenant_id': tenant_id,
+            'text': sc['text'],
+            'metadata': sc.get('meta', {}),
+            'section': sc.get('meta', {}).get('section'),
+            'type': sc.get('meta', {}).get('type'),
+            'block_type': sc.get('block_type'),
+        } for i, sc in enumerate(smart_chunks)]
         
         db.create_document_and_chunks(
             doc_id=doc_id, tenant_id=tenant_id, owner_user_id=owner_user_id,

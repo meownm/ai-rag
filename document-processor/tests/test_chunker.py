@@ -36,3 +36,41 @@ def test_respects_paragraph_boundaries_and_lists_without_markers(monkeypatch):
     assert "Третий пункт списка без маркера" in chunk_texts[1]
     assert chunk_texts[2].startswith("Заключительный абзац")
     assert all(chunk["meta"].get("source") == "test" for chunk in chunks)
+
+
+def test_table_row_grouping_and_overlap(monkeypatch):
+    class DummyEncoder:
+        def encode(self, text: str, disallowed_special=()):
+            return text.split()
+
+    monkeypatch.setattr("chunker.tiktoken.get_encoding", lambda name: DummyEncoder())
+
+    chunker = SmartChunker(
+        chunk_tokens=20,
+        overlap_tokens=0,
+        table_row_group_tokens=12,
+        table_row_overlap=1,
+        encoding="gpt2",
+    )
+    chunker.enc = DummyEncoder()
+
+    table_text = "\n".join([
+        "| H1 | H2 |",
+        "| --- | --- |",
+        "| r1 | c1 |",
+        "| r2 | c2 |",
+        "| r3 | c3 |",
+        "| r4 | c4 |",
+    ])
+
+    chunks = chunker._handle_table(table_text, {"type": "table", "section": "Table 1"})
+    assert len(chunks) == 3
+
+    first_block_rows = chunks[0]["text"].split("\n")
+    second_block_rows = chunks[1]["text"].split("\n")
+
+    assert "| r1 | c1 |" in first_block_rows
+    assert "| r2 | c2 |" in first_block_rows
+    # r2 должна появиться и в следующем блоке благодаря overlap по строкам
+    assert "| r2 | c2 |" in second_block_rows
+    assert all(chunk["meta"].get("section") == "Table 1" for chunk in chunks)
