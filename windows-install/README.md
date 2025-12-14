@@ -18,6 +18,20 @@
    - Пути к директориям `POSTGRES_DATA_PATH`, `KEYCLOAK_DATA_PATH` и `MINIO_DATA_PATH` указывают на существующие или создаваемые папки на диске Windows (например, `C:/ai-rag/data/...`).
    - OIDC-настройки (`OIDC_ISSUER_URI`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, `OIDC_LOGOUT_REDIRECT_URI`) соответствуют вашим приложениям.
 
+## Установка зависимостей Python-проектов
+Запустите установку зависимостей всех подпроектов через Poetry:
+
+```powershell
+./install-poetry-deps.ps1
+```
+
+Скрипт автоматически:
+- установит Poetry, если он не найден в `PATH`;
+- проверит актуальность `poetry.lock` во всех Python-проектах и пересоберет файл при необходимости;
+- выполнит `poetry install` для каждого проекта.
+
+Если хотите принудительно пересоздать все lock-файлы независимо от их состояния, добавьте флаг `-ForceLock`.
+
 ## Запуск
 1. Откройте PowerShell в каталоге `windows-install/`.
 2. Выполните скрипт подготовки и запуска:
