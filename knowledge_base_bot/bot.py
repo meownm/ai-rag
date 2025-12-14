@@ -167,6 +167,91 @@ class KnowledgeBaseAPI:
 
     async def ensure_tokens(self, telegram_id: int) -> StoredTokens:
         return await self._get_valid_tokens(telegram_id)
+    def __init__(self, base_url, username, password):
+        self._base_url = base_url
+        self._username = username
+        self._password = password
+
+        self._auth_client = httpx.AsyncClient(timeout=10.0)
+        self._api_client = httpx.AsyncClient(timeout=30.0, auth=BearerAuth(self))
+
+        self._token: Optional[str] = None
+        self._token_expires: Optional[datetime] = None
+        self._refresh_token: Optional[str] = None
+        self._refresh_expires: Optional[datetime] = None
+
+    def is_token_valid(self) -> bool:
+        """Проверяет, действителен ли токен, с запасом в 60 секунд."""
+        return (
+            self._token is not None and
+            self._token_expires is not None and
+            self._token_expires > (datetime.now(timezone.utc) + timedelta(seconds=60))
+        )
+
+    def _can_use_refresh_token(self) -> bool:
+        return (
+            self._refresh_token is not None and
+            self._refresh_expires is not None and
+            self._refresh_expires > (datetime.now(timezone.utc) + timedelta(seconds=60))
+        )
+
+    def invalidate_tokens(self):
+        """Удаляет текущие access/refresh-токены, например при разлинковке Telegram."""
+        self._token = None
+        self._token_expires = None
+        self._refresh_token = None
+        self._refresh_expires = None
+        logger.info("Token cache invalidated by unlink request")
+
+    def _update_tokens_from_response(self, token_data: dict):
+        self._token = token_data["access_token"]
+        payload = jwt.decode(self._token, "", options={"verify_signature": False, "verify_aud": False})
+        self._token_expires = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
+
+        self._refresh_token = token_data.get("refresh_token")
+        refresh_expires_in = token_data.get("refresh_expires_in")
+        if self._refresh_token and refresh_expires_in:
+            self._refresh_expires = datetime.now(timezone.utc) + timedelta(seconds=int(refresh_expires_in))
+        elif not self._refresh_token:
+            self._refresh_expires = None
+
+    async def _refresh_token(self):
+        """Обновляет токен, используя отдельный, простой HTTP-клиент."""
+        logger.info("Refreshing auth token from KB API")
+        try:
+            if self._can_use_refresh_token():
+                try:
+                    response = await self._auth_client.post(
+                        f"{self._base_url}/token",
+                        data={"grant_type": "refresh_token", "refresh_token": self._refresh_token},
+                    )
+                    response.raise_for_status()
+                    token_data = response.json()
+                    self._update_tokens_from_response(token_data)
+                    logger.info(
+                        "Token refreshed via refresh_token, valid until %s", self._token_expires
+                    )
+                    return
+                except httpx.HTTPStatusError as e:
+                    logger.warning(
+                        "Refresh token exchange failed (%s). Falling back to password grant.",
+                        e.response.status_code,
+                    )
+
+            response = await self._auth_client.post(
+                f"{self._base_url}/token",
+                data={"grant_type": "password", "username": self._username, "password": self._password},
+            )
+            response.raise_for_status()
+            token_data = response.json()
+            self._update_tokens_from_response(token_data)
+            logger.info(f"Token refreshed, valid until {self._token_expires}")
+        except httpx.HTTPStatusError as e:
+            logger.critical(f"FATAL: Could not get auth token: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.critical(f"FATAL: Could not get auth token due to network error: {e}")
+            raise
 
     # --- CRUD методы для API ---
     async def get_status(self, telegram_id: int) -> StatusResponse:
@@ -320,6 +405,14 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(message, parse_mode='Markdown')
 
+
+async def unlink_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сбрасывает локальные токены бота и инициирует ре-логин при следующем запросе."""
+    kb_api.invalidate_tokens()
+    await update.message.reply_text(
+        "🔒 Связка с учеткой сброшена. Следующий запрос выполнит повторную авторизацию."
+    )
+
 # ===============================================================================
 # ОБРАБОТЧИК НАЖАТИЙ НА КНОПКИ (CALLBACKS)
 # ===============================================================================
@@ -439,7 +532,8 @@ async def post_init(application: Application):
         BotCommand("link", "Привязать аккаунт"),
         BotCommand("list", "Показать все элементы"),
         BotCommand("search", "Искать элемент"),
-        BotCommand("status", "Показать статистику")
+        BotCommand("status", "Показать статистику"),
+        BotCommand("unlink", "Сбросить привязку/токены")
     ]
     await application.bot.set_my_commands(commands)
     logger.info("Bot commands menu has been set.")
@@ -468,6 +562,7 @@ def main():
     application.add_handler(CommandHandler("list", list_items_handler))
     application.add_handler(CommandHandler("search", search_handler))
     application.add_handler(CommandHandler("status", status_handler))
+    application.add_handler(CommandHandler("unlink", unlink_handler))
     application.add_handler(MessageHandler(filters.Document.ALL, document_handler))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
     
