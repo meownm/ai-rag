@@ -1,4 +1,3 @@
-# add your model's MetaData object here
-# for 'autogenerate' support
-from main import Base
+from models import Base
+
 target_metadata = Base.metadata

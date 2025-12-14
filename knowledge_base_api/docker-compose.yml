@@ -1,8 +1,6 @@
-# docker-compose.yml
-version: '3.8'
+version: '3.9'
 
 services:
-  # Сервис вашего API
   api:
     build: .
     container_name: kb_api
@@ -10,5 +8,19 @@ services:
       - "8001:8001"
     env_file:
       - .env.docker
-    # Мы убрали 'depends_on', так как больше не управляем базой данных и S3
+    environment:
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-knowledge-base-api}
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://keycloak:8080/realms/ai-rag}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-http://keycloak:8080/realms/ai-rag/protocol/openid-connect/certs}
+    depends_on:
+      - keycloak
     restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
