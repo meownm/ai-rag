@@ -1,37 +1,50 @@
 param(
-  [string]$EnvFile = ".env"
+    [switch]$SkipPull
 )
 
 $ErrorActionPreference = "Stop"
+Push-Location $PSScriptRoot
 
-if (-Not (Test-Path $EnvFile)) {
-  Write-Error "Env file '$EnvFile' not found. Copy .env.example to .env and update values."
+$envFile = Join-Path $PSScriptRoot ".env"
+if (-not (Test-Path $envFile)) {
+    Write-Error "Файл .env не найден. Скопируйте .env.example и задайте значения переменных."
 }
 
-Write-Host "Loading environment variables from $EnvFile" -ForegroundColor Cyan
-Get-Content $EnvFile | ForEach-Object {
-  if ($_ -match "^#" -or -not $_) { return }
-  $name, $value = $_ -split '=', 2
-  [System.Environment]::SetEnvironmentVariable($name, $value)
+# Подгрузить переменные окружения из .env
+Get-Content $envFile | Where-Object { $_ -and ($_ -notmatch '^#') } | ForEach-Object {
+    $pair = $_ -split '=', 2
+    if ($pair.Count -eq 2) {
+        [System.Environment]::SetEnvironmentVariable($pair[0].Trim(), $pair[1].Trim())
+    }
 }
 
-$required = @('KEYCLOAK_ADMIN','KEYCLOAK_ADMIN_PASSWORD','POSTGRES_PASSWORD','MINIO_ROOT_PASSWORD','HOST_DATA_DIR')
-foreach ($key in $required) {
-  if (-not [System.Environment]::GetEnvironmentVariable($key)) {
-    Write-Error "Missing required env variable: $key"
-  }
+# Создать каталоги для volume, если их нет
+$volumePaths = @(
+    $env:POSTGRES_DATA_PATH,
+    $env:KEYCLOAK_DATA_PATH,
+    $env:MINIO_DATA_PATH
+) | Where-Object { $_ -and ($_.Trim() -ne '') }
+
+foreach ($path in $volumePaths) {
+    if (-not (Test-Path $path)) {
+        Write-Host "Создаю каталог $path" -ForegroundColor Cyan
+        New-Item -ItemType Directory -Path $path -Force | Out-Null
+    }
 }
 
-$hostData = [System.Environment]::GetEnvironmentVariable('HOST_DATA_DIR')
-if (-not (Test-Path $hostData)) {
-  Write-Host "Creating data directory at $hostData" -ForegroundColor Yellow
-  New-Item -ItemType Directory -Force -Path $hostData | Out-Null
+# Скачивание образов
+if (-not $SkipPull) {
+    $images = @($env:POSTGRES_IMAGE, $env:KEYCLOAK_IMAGE, $env:MINIO_IMAGE)
+    foreach ($image in $images) {
+        if ($image -and ($image.Trim() -ne '')) {
+            Write-Host "Загрузка образа $image" -ForegroundColor Cyan
+            docker pull $image
+        }
+    }
 }
 
-Write-Host "Pulling images..." -ForegroundColor Cyan
-docker compose --env-file $EnvFile -f compose.yml pull
+# Запуск docker compose
+Write-Host "Запуск docker compose" -ForegroundColor Green
+docker compose --env-file $envFile -f (Join-Path $PSScriptRoot "docker-compose.yml") up -d
 
-Write-Host "Starting stack..." -ForegroundColor Cyan
-docker compose --env-file $EnvFile -f compose.yml up -d
-
-Write-Host "Containers running. Access Keycloak at http://localhost:$([System.Environment]::GetEnvironmentVariable('KEYCLOAK_HTTP_PORT'))" -ForegroundColor Green
+Pop-Location
