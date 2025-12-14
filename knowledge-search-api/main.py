@@ -1,10 +1,10 @@
-import time
 import os
 import json
+import time
 import uvicorn
 import torch
 import re
-from fastapi import FastAPI, Request, Response, status as http_status, HTTPException
+from fastapi import Depends, FastAPI, Request, Response, status as http_status, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -16,7 +16,7 @@ from sentence_transformers import SentenceTransformer, CrossEncoder
 from schemas import (
     AnswerRequest, AnswerResponse, HISTORY_TABLES_DDL,
     InternalChunk, HighlightedCitation, StreamTextChunk, StreamMetadataChunk,
-    ConversationInfo, FullHistoryResponse
+    ConversationInfo, FullHistoryResponse, TokenIdentity
 )
 from clients import PostgreSQLClient, Neo4jClient, load_embedding_model
 from retrieval import retrieve, retrieve_graph
@@ -28,6 +28,7 @@ from history import (
 )
 from highlighter import verify_and_highlight_citations
 from health_services import check_postgresql, check_neo4j, check_ollama
+from auth import get_token_identity
 
 load_dotenv()
 
@@ -90,14 +91,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Knowledge Search API",
     description="API для интеллектуального поиска по базе знаний.",
-    version="1.6.0", # Обновляем версию
+    version="1.7.0", # Обновляем версию
     lifespan=lifespan
 )
 
 # --- Настройка CORS Middleware ---
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+if not allowed_origins:
+    allowed_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -128,7 +137,7 @@ def _build_citation_fallback(retrieved_chunks: List[InternalChunk]) -> tuple[str
 # --- Эндпоинты API ---
 
 @app.post("/v1/answer", tags=["Search"])
-async def get_answer(req: AnswerRequest, request: Request):
+async def get_answer(req: AnswerRequest, request: Request, identity: TokenIdentity = Depends(get_token_identity)):
     start_time = time.time()
     
     db_client = request.app.state.db_client
@@ -136,7 +145,13 @@ async def get_answer(req: AnswerRequest, request: Request):
     embedding_model = request.app.state.embedding_model
     reranker_model = request.app.state.reranker_model
     
-    conv_id = get_or_create_conversation(db_client, req.conversation_id, user_id="default-user", first_query=req.query)
+    conv_id = get_or_create_conversation(
+        db_client,
+        req.conversation_id,
+        user_id=identity.user_id,
+        org_id=identity.org_id,
+        first_query=req.query,
+    )
     conversation_history = get_conversation_history(db_client, conv_id)
 
     graph_context_str, graph_status = "", "disabled"
@@ -162,7 +177,16 @@ async def get_answer(req: AnswerRequest, request: Request):
             answer=final_answer, conversation_id=conv_id, citations=[], graph_status=graph_status,
             enrichment_used=False, used_chunks=0, used_tokens=0, latency_ms=latency
         )
-        save_search_result(db_client, conv_id, req.query, response_data, [], success=False)
+        save_search_result(
+            db_client,
+            conv_id,
+            req.query,
+            response_data,
+            [],
+            success=False,
+            user_id=identity.user_id,
+            org_id=identity.org_id,
+        )
         return response_data
         
     context_data = build_context(retrieved_chunks, conversation_history, graph_context_str)
@@ -206,7 +230,16 @@ async def get_answer(req: AnswerRequest, request: Request):
 
             final_response = AnswerResponse(answer=verified_answer or "Failed to generate stream.", **metadata_chunk.dict())
             history_citations_json = [c.dict() for c in final_citations]
-            save_search_result(db_client, conv_id, req.query, final_response, history_citations_json, success=is_success)
+            save_search_result(
+                db_client,
+                conv_id,
+                req.query,
+                final_response,
+                history_citations_json,
+                success=is_success,
+                user_id=identity.user_id,
+                org_id=identity.org_id,
+            )
 
         return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
@@ -236,7 +269,16 @@ async def get_answer(req: AnswerRequest, request: Request):
         )
         
         history_citations_json = [c.dict() for c in citations_for_response]
-        save_search_result(db_client, conv_id, req.query, response, history_citations_json, success=is_success)
+        save_search_result(
+            db_client,
+            conv_id,
+            req.query,
+            response,
+            history_citations_json,
+            success=is_success,
+            user_id=identity.user_id,
+            org_id=identity.org_id,
+        )
         return response
 
 @app.get("/health", tags=["Monitoring"])
@@ -255,21 +297,21 @@ def health_check(request: Request, response: Response):
     return services_status
 
 @app.get("/v1/history", response_model=List[ConversationInfo], tags=["History"])
-async def get_history_list(user_id: str, limit: int = 20, offset: int = 0, request: Request = None):
+async def get_history_list(limit: int = 20, offset: int = 0, request: Request = None, identity: TokenIdentity = Depends(get_token_identity)):
     db_client = request.app.state.db_client
-    history_data = get_history_list_for_user(db_client, user_id, limit, offset)
+    history_data = get_history_list_for_user(db_client, identity.user_id, identity.org_id, limit, offset)
     return [
         ConversationInfo(
-            conversation_id=str(row['conversation_id']), user_id=row['user_id'],
+            conversation_id=str(row['conversation_id']), user_id=row['user_id'], org_id=row['org_id'],
             title=row['title'], created_at=row['created_at']
         ) for row in history_data
     ]
 
 @app.get("/v1/history/{query_id}", response_model=FullHistoryResponse, tags=["History"])
-async def get_history_details(query_id: int, request: Request = None):
+async def get_history_details(query_id: int, request: Request = None, identity: TokenIdentity = Depends(get_token_identity)):
     db_client = request.app.state.db_client
-    full_history = get_full_history_by_query_id(db_client, query_id)
-    
+    full_history = get_full_history_by_query_id(db_client, query_id, identity.user_id, identity.org_id)
+
     if not full_history:
         raise HTTPException(status_code=404, detail="Query ID not found")
         
