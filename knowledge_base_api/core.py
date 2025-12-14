@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     secret_key: str
     algorithm: str
     access_token_expire_minutes: int
+    refresh_token_expire_minutes: int = 60 * 24 * 30
 
     oidc_client_id: Optional[str] = None
     oidc_issuer: Optional[str] = None
@@ -65,8 +66,34 @@ def create_access_token(data: dict, expires_delta: Optional[datetime.timedelta] 
     expire = datetime.datetime.utcnow() + (
         expires_delta or datetime.timedelta(minutes=settings.access_token_expire_minutes)
     )
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "type": "access"})
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
+
+
+def create_refresh_token(data: dict, expires_delta: Optional[datetime.timedelta] = None) -> str:
+    to_encode = data.copy()
+    expire = datetime.datetime.utcnow() + (
+        expires_delta or datetime.timedelta(minutes=settings.refresh_token_expire_minutes)
+    )
+    to_encode.update({"exp": expire, "type": "refresh"})
+    return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
+
+
+def decode_token(token: str, expected_type: Optional[str] = None) -> dict:
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+    except JWTError as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    token_type = payload.get("type")
+    if expected_type and token_type != expected_type:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
+
+    return payload
 
 
 async def get_db() -> AsyncSession:
@@ -169,9 +196,8 @@ async def get_current_user(
     claims = getattr(request.state, "oidc_claims", None)
     if not claims:
         try:
-            payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
-            claims = payload
-        except JWTError:
+            claims = decode_token(token, expected_type="access")
+        except HTTPException:
             claims = await validate_oidc_token(token)
 
     subject = claims.get("sub")

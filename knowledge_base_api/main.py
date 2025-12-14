@@ -20,7 +20,7 @@ from core import (
 )
 from logging_setup import setup_logging, trace_id_var
 from models import Base, DeepHealthCheckResponse, StatusResponse, Tenant, User, UserRole
-from routers import auth, items
+from routers import auth, items, telegram
 from routers import admin as admin_router
 from services import S3UploadError
 
@@ -61,6 +61,7 @@ app.add_middleware(OIDCMiddleware)
 app.include_router(auth.router)
 app.include_router(items.router)
 app.include_router(admin_router.router)
+app.include_router(telegram.router)
 
 
 async def seed_initial_data(db: AsyncSession):

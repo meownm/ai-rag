@@ -136,6 +136,18 @@ class KnowledgeEvent(Base):
     s3_path = Column(String, nullable=True)
 
 
+class UserTelegramLink(Base):
+    __tablename__ = "user_telegram_links"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    telegram_id = Column(BigInteger, primary_key=True)
+    username = Column(String, nullable=True)
+    state_token = Column(String, unique=True, nullable=False)
+    verified_at = Column(DateTime, nullable=True)
+
+    user = relationship("User")
+
+
 class UserPublic(BaseModel):
     id: uuid.UUID = Field(description="Уникальный ID пользователя")
     username: str = Field(description="Логин пользователя")
@@ -220,3 +232,20 @@ class UserOrganizationLink(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TokenPair(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class TelegramLinkStart(BaseModel):
+    telegram_id: int
+    username: Optional[str] = None
+
+
+class TelegramLinkStatus(BaseModel):
+    state_token: str
+    verified: bool
