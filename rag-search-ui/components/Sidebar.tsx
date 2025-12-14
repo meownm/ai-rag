@@ -7,9 +7,11 @@ import { getHistoryList, clearHistory } from '../services/api';
 interface SidebarProps {
   onNewChat: () => void;
   onSelectConversation: (conversation: ConversationInfo) => void;
+  activeSection: 'chat' | 'profile' | 'admin';
+  onChangeSection: (section: 'chat' | 'profile' | 'admin') => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ onNewChat, onSelectConversation }) => {
+const Sidebar: React.FC<SidebarProps> = ({ onNewChat, onSelectConversation, activeSection, onChangeSection }) => {
   const [history, setHistory] = useState<ConversationInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -64,15 +66,37 @@ const Sidebar: React.FC<SidebarProps> = ({ onNewChat, onSelectConversation }) =>
 
   return (
     <aside className="w-64 bg-gray-800 p-4 flex flex-col border-r border-gray-700">
-      <button
-        onClick={onNewChat}
-        className="w-full bg-teal-500 hover:bg-teal-600 text-white font-bold py-2 px-4 rounded transition-colors duration-200 mb-4"
-      >
-        + Новый чат
-      </button>
-      <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">История</h2>
+      <nav className="space-y-2 mb-4">
+        {[
+          { id: 'chat' as const, label: 'Чат' },
+          { id: 'profile' as const, label: 'Мой профиль' },
+          { id: 'admin' as const, label: 'Администрирование' },
+        ].map(item => (
+          <button
+            key={item.id}
+            onClick={() => onChangeSection(item.id)}
+            className={`w-full text-left px-3 py-2 rounded-md transition-colors ${activeSection === item.id ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700'}`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      {activeSection === 'chat' && (
+        <>
+          <button
+            onClick={onNewChat}
+            className="w-full bg-teal-500 hover:bg-teal-600 text-white font-bold py-2 px-4 rounded transition-colors duration-200 mb-4"
+          >
+            + Новый чат
+          </button>
+          <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">История</h2>
+        </>
+      )}
       <div className="flex-1 overflow-y-auto">
-        {isLoading ? (
+        {activeSection !== 'chat' ? (
+          <div className="text-gray-500 text-sm">Выберите раздел, чтобы продолжить.</div>
+        ) : isLoading ? (
           <div className="text-center text-gray-500">Загрузка...</div>
         ) : error ? (
           <div className="text-center text-red-500 p-2">{error}</div>
@@ -102,22 +126,24 @@ const Sidebar: React.FC<SidebarProps> = ({ onNewChat, onSelectConversation }) =>
             </div>
         )}
       </div>
-      <div className="mt-auto pt-4 border-t border-gray-700">
-        <button
-          onClick={handleClearHistory}
-          disabled={isClearing}
-          className="w-full bg-red-800 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed flex items-center justify-center"
-        >
-          {isClearing ? (
-             <>
-              <div className="w-4 h-4 border-2 border-t-transparent border-white rounded-full animate-spin mr-2"></div>
-              Очистка...
-            </>
-          ) : (
-            'Очистить историю'
-          )}
-        </button>
-      </div>
+      {activeSection === 'chat' && (
+        <div className="mt-auto pt-4 border-t border-gray-700">
+          <button
+            onClick={handleClearHistory}
+            disabled={isClearing}
+            className="w-full bg-red-800 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition-colors duration-200 disabled:bg-gray-600 disabled:cursor-not-allowed flex items-center justify-center"
+          >
+            {isClearing ? (
+               <>
+                <div className="w-4 h-4 border-2 border-t-transparent border-white rounded-full animate-spin mr-2"></div>
+                Очистка...
+              </>
+            ) : (
+              'Очистить историю'
+            )}
+          </button>
+        </div>
+      )}
     </aside>
   );
 };

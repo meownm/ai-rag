@@ -19,6 +19,8 @@ export interface Filters {
 export type SearchMode = "dense" | "bm25" | "hybrid" | "graph" | "hybrid+graph";
 export type ContextMode = "short" | "long";
 
+export type UserRole = 'admin' | 'editor' | 'viewer';
+
 export interface AnswerRequest {
   query: string;
   conversation_id?: string | null;
@@ -67,6 +69,30 @@ export interface ConversationInfo {
     user_id?: string | null;
     title?: string | null;
     created_at: string; // ISO datetime string
+}
+
+export interface UserProfile {
+    id: string;
+    name: string;
+    email: string;
+    organization: string;
+    role: UserRole;
+    telegramUsername?: string | null;
+}
+
+export interface AdminUser extends UserProfile {
+    status: 'active' | 'invited' | 'blocked';
+    lastActivity: string;
+}
+
+export interface Invite {
+    id: string;
+    email?: string;
+    link: string;
+    createdAt: string;
+    invitedBy: string;
+    status: 'pending' | 'accepted';
+    type: 'email' | 'link';
 }
 
 export interface Message {
