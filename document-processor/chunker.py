@@ -398,18 +398,21 @@ class SmartChunker:
                     combined_meta = self._build_combined_meta(buffer)
                     chunks.append({"text": chunk_text, "meta": combined_meta, "block_type": "composite_section"})
                     buffer = []
+                    buffer_tokens = 0
 
                 chunks.extend(self._split_large_text_block(sec_text, sec_meta))
                 continue
 
-            buffer_tokens = self.count_tokens("\n\n".join(b[1]['text'] for b in buffer))
             if buffer_tokens > 0 and buffer_tokens + sec_tokens > self.chunk_tokens:
                 chunk_text = "\n\n".join(b[1]['text'] for b in buffer)
                 combined_meta = self._build_combined_meta(buffer)
                 chunks.append({"text": chunk_text, "meta": combined_meta, "block_type": "composite_section"})
 
                 buffer = self._build_text_overlap(buffer) if self.overlap_tokens > 0 else []
+                buffer_tokens = self.count_tokens("\n\n".join(b[1]['text'] for b in buffer)) if buffer else 0
 
+            addition_text = f"\n\n{sec_text}" if buffer else sec_text
+            buffer_tokens += self.count_tokens(addition_text)
             buffer.append((idx, sec))
             
         if buffer:
