@@ -14,6 +14,7 @@ This plan documents how to introduce centralized authentication/authorization, T
 - **Tenant Model**: `Organization` maps 1:1 to a Keycloak realm or realm+client role namespace. Users have `idp_subject` and a foreign key to a single `organization_id`.
 - **Authorization**: Roles stored as Keycloak client roles; JWT contains `org_id` and role claims. Services map `org_id` → internal `tenant_id` and enforce RBAC middleware.
 - **Default Admin**: Seed script creates a Keycloak realm admin and a corresponding internal admin user tied to the bootstrap tenant.
+- **Token Lifecycle**: Short-lived access tokens (≈15m), rotated refresh tokens, and back-/front-channel logout wired to all clients. Password change or role revocation triggers realm/client session logout to invalidate refresh tokens.
 
 ## Implementation Phases
 ### Phase 1: OIDC Core and Organizations (knowledge_base_api)
@@ -24,6 +25,7 @@ This plan documents how to introduce centralized authentication/authorization, T
 ### Phase 2: Web Login & Telegram Linking (parallel)
 - **Web**: PKCE login against Keycloak; session/token storage with `org_id` propagation on API requests.
 - **Telegram Bot**: `/link` command issues a state token; deep link/web confirms the state and stores `telegram_id` + `username` in `user_telegram_links`; bot exchanges for user JWT to call APIs under the user context.
+- **Logout/Refresh flows**: Web performs refresh before `exp` and calls `end_session_endpoint` on logout; bot persists access/refresh tokens per linked `telegram_id`, refreshes automatically, and clears them on `/unlink` or unlink webhook.
 
 ### Phase 3: Search API User Binding
 - Add bearer-token validation; propagate `user_id`/`org_id` through conversations, history, and logging.
