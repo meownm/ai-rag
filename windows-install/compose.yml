@@ -1,0 +1,61 @@
+name: ai-rag-windows
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: rag-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - ${HOST_DATA_DIR}/postgres:/var/lib/postgresql/data
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.5
+    container_name: rag-keycloak
+    command: start-dev --hostname ${KEYCLOAK_HOSTNAME} --http-port ${KEYCLOAK_HTTP_PORT}
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_USERNAME: ${POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      KC_HTTP_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_HTTP_PORT}:8080"
+    depends_on:
+      - postgres
+
+  minio:
+    image: minio/minio:RELEASE.2024-03-15T01-07-19Z
+    container_name: rag-minio
+    command: server /data --console-address :${MINIO_CONSOLE_PORT}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
+    volumes:
+      - ${HOST_DATA_DIR}/minio:/data
+
+  # Example placeholders for application services. Uncomment and adjust images/env to match your build outputs.
+  # knowledge_base_api:
+  #   image: ghcr.io/your-org/knowledge-base-api:latest
+  #   environment:
+  #     OIDC_ISSUER: ${OIDC_ISSUER}
+  #     OIDC_CLIENT_ID: ${OIDC_KB_API_CLIENT_ID}
+  #     DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+  #   ports:
+  #     - "8000:8000"
+  #   depends_on:
+  #     - keycloak
+  #     - postgres
+
+volumes:
+  postgres:
+  minio:
