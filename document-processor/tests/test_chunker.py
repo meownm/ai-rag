@@ -74,3 +74,30 @@ def test_table_row_grouping_and_overlap(monkeypatch):
     # r2 должна появиться и в следующем блоке благодаря overlap по строкам
     assert "| r2 | c2 |" in second_block_rows
     assert all(chunk["meta"].get("section") == "Table 1" for chunk in chunks)
+
+
+def test_text_overlap_between_chunks(monkeypatch):
+    class DummyEncoder:
+        def encode(self, text: str, disallowed_special=()):
+            return text.split()
+
+    monkeypatch.setattr("chunker.tiktoken.get_encoding", lambda name: DummyEncoder())
+
+    chunker = SmartChunker(chunk_tokens=5, overlap_tokens=2, doc_limit=0, encoding="gpt2")
+    chunker.enc = DummyEncoder()
+
+    sections = [
+        {"text": "Первый абзац текста", "meta": {}},
+        {"text": "Второй абзац длиннее", "meta": {}},
+    ]
+
+    chunks = chunker.split_document(sections)
+
+    assert len(chunks) == 2
+
+    first_chunk_text = chunks[0]["text"]
+    second_chunk_text = chunks[1]["text"]
+
+    assert sections[0]["text"] == first_chunk_text
+    assert sections[0]["text"] in second_chunk_text
+    assert sections[1]["text"] in second_chunk_text
