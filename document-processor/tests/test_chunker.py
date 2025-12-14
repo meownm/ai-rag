@@ -74,3 +74,35 @@ def test_table_row_grouping_and_overlap(monkeypatch):
     # r2 должна появиться и в следующем блоке благодаря overlap по строкам
     assert "| r2 | c2 |" in second_block_rows
     assert all(chunk["meta"].get("section") == "Table 1" for chunk in chunks)
+
+
+def test_split_document_avoids_recounting_large_buffers(monkeypatch):
+    class DummyEncoder:
+        def encode(self, text: str, disallowed_special=()):
+            return text.split()
+
+    monkeypatch.setattr("chunker.tiktoken.get_encoding", lambda name: DummyEncoder())
+
+    chunker = SmartChunker(chunk_tokens=10, overlap_tokens=0, doc_limit=5, encoding="gpt2")
+    chunker.enc = DummyEncoder()
+
+    call_counts = {"total": 0, "large": 0}
+
+    def fake_count_tokens(text: str) -> int:
+        call_counts["total"] += 1
+        if len(text) > 300:
+            call_counts["large"] += 1
+        return len(text.split())
+
+    monkeypatch.setattr(chunker, "count_tokens", fake_count_tokens)
+
+    sections = [
+        {"text": f"Section {i} content {i}", "meta": {"type": "paragraph"}}
+        for i in range(50)
+    ]
+
+    chunks = chunker.split_document(sections)
+
+    assert chunks
+    assert call_counts["large"] == 1
+    assert call_counts["total"] <= len(sections) * 2 + 2

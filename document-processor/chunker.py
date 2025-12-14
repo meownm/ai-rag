@@ -223,6 +223,29 @@ class SmartChunker:
 
         return overlap_items
 
+    def _build_text_overlap(self, buffer: List[Tuple[int, Dict]]) -> List[Tuple[int, Dict]]:
+        if self.overlap_tokens <= 0:
+            return []
+
+        overlap_buffer: List[Tuple[int, Dict]] = []
+        accumulated_tokens = 0
+
+        for idx, sec in reversed(buffer):
+            sec_text = sec.get("text", "")
+            addition_text = f"\n\n{sec_text}" if overlap_buffer else sec_text
+            addition_tokens = self.count_tokens(addition_text)
+
+            if overlap_buffer and accumulated_tokens + addition_tokens > self.overlap_tokens:
+                break
+
+            overlap_buffer.insert(0, (idx, sec))
+            accumulated_tokens += addition_tokens
+
+            if accumulated_tokens >= self.overlap_tokens:
+                break
+
+        return overlap_buffer
+
     def _handle_list(self, text: str, meta: Dict) -> List[Dict]:
         """Обработка списков. Если список слишком длинный, он разбивается на части."""
         if self.count_tokens(text) <= self.list_limit:
@@ -376,18 +399,21 @@ class SmartChunker:
                     combined_meta = self._build_combined_meta(buffer)
                     chunks.append({"text": chunk_text, "meta": combined_meta, "block_type": "composite_section"})
                     buffer = []
+                    buffer_tokens = 0
 
                 chunks.extend(self._split_large_text_block(sec_text, sec_meta))
                 continue
 
-            buffer_tokens = self.count_tokens("\n\n".join(b[1]['text'] for b in buffer))
             if buffer_tokens > 0 and buffer_tokens + sec_tokens > self.chunk_tokens:
                 chunk_text = "\n\n".join(b[1]['text'] for b in buffer)
                 combined_meta = self._build_combined_meta(buffer)
                 chunks.append({"text": chunk_text, "meta": combined_meta, "block_type": "composite_section"})
 
                 buffer = self._build_text_overlap(buffer) if self.overlap_tokens > 0 else []
+                buffer_tokens = self.count_tokens("\n\n".join(b[1]['text'] for b in buffer)) if buffer else 0
 
+            addition_text = f"\n\n{sec_text}" if buffer else sec_text
+            buffer_tokens += self.count_tokens(addition_text)
             buffer.append((idx, sec))
             
         if buffer:
