@@ -58,6 +58,21 @@ class SmartChunker:
         """Считает количество токенов в тексте."""
         return len(self.enc.encode(text, disallowed_special=()))
 
+    def _combine_sections_metadata(self, sections: List[Dict]) -> Dict:
+        """
+        Собирает метаданные всех секций без потери информации.
+
+        Ранее метаданные объединялись простым update()/comprehension, что приводило к
+        перезаписи одинаковых ключей (например, заголовков разделов). Теперь каждая
+        секция сохраняется отдельно в sections_meta с указанием порядка.
+        """
+        sections_meta = []
+        for idx, sec in enumerate(sections, start=1):
+            meta = sec.get("meta", {}) or {}
+            sections_meta.append({"section_index": idx, **meta})
+
+        return {"sections_meta": sections_meta} if sections_meta else {}
+
     def _split_large_text_block(self, text: str, meta: dict) -> List[Dict]:
         """
         Внутренняя функция для семантической нарезки одного очень большого блока текста.
