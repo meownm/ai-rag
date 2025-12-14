@@ -6,7 +6,7 @@
 import hashlib
 import tiktoken
 import logging
-from typing import List, Dict, Iterable, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 import re
 
 class SmartChunker:
@@ -223,7 +223,11 @@ class SmartChunker:
 
         return overlap_items
 
-    def _build_text_overlap(self, buffer: List[Tuple[int, Dict]]) -> List[Tuple[int, Dict]]:
+    def _build_text_overlap(
+        self,
+        buffer: List[Tuple[int, Dict]],
+        section_token_cache: Optional[Dict[int, int]] = None,
+    ) -> List[Tuple[int, Dict]]:
         """
         Формирует хвост буфера для перекрытия чанков по количеству токенов.
 
@@ -235,7 +239,13 @@ class SmartChunker:
         accumulated_tokens = 0
 
         for idx, sec in reversed(buffer):
-            sec_tokens = self.count_tokens(sec.get("text", ""))
+            if section_token_cache is not None:
+                sec_tokens = section_token_cache.get(idx)
+                if sec_tokens is None:
+                    sec_tokens = self.count_tokens(sec.get("text", ""))
+                    section_token_cache[idx] = sec_tokens
+            else:
+                sec_tokens = self.count_tokens(sec.get("text", ""))
             if overlap_buffer and accumulated_tokens + sec_tokens > self.overlap_tokens:
                 break
             overlap_buffer.insert(0, (idx, sec))
@@ -364,8 +374,9 @@ class SmartChunker:
         6. Очень большие блоки (> `section_limit`) обрабатываются отдельно функцией нарезки по предложениям.
         """
         total_text = "\n\n".join(sec["text"] for sec in sections if sec.get("text"))
-        if self.count_tokens(total_text) <= self.doc_limit:
-            logging.info(f"Документ достаточно мал ({self.count_tokens(total_text)} токенов), возвращается как единый чанк.")
+        total_tokens = self.count_tokens(total_text)
+        if total_tokens <= self.doc_limit:
+            logging.info(f"Документ достаточно мал ({total_tokens} токенов), возвращается как единый чанк.")
             section_entries = [(idx, sec) for idx, sec in enumerate(sections) if sec.get("text")]
             combined_meta = self._build_combined_meta(section_entries, is_whole_doc=True)
 
@@ -374,6 +385,21 @@ class SmartChunker:
         chunks = []
         buffer: List[Tuple[int, Dict]] = []
         buffer_tokens = 0
+        section_token_cache: Dict[int, int] = {}
+        separator_tokens = self.count_tokens("\n\n")
+
+        def calculate_buffer_tokens(buffer_items: List[Tuple[int, Dict]]) -> int:
+            total = 0
+            for pos, (item_idx, item_sec) in enumerate(buffer_items):
+                sec_tokens_cached = section_token_cache.get(item_idx)
+                if sec_tokens_cached is None:
+                    sec_tokens_cached = self.count_tokens(item_sec.get("text", ""))
+                    section_token_cache[item_idx] = sec_tokens_cached
+                total += sec_tokens_cached
+                if pos > 0:
+                    total += separator_tokens
+
+            return total
 
         for idx, sec in enumerate(sections):
             sec_text = sec.get("text", "").strip()
@@ -391,6 +417,7 @@ class SmartChunker:
                 continue
 
             sec_tokens = self.count_tokens(sec_text)
+            section_token_cache[idx] = sec_tokens
 
             if sec_tokens > self.section_limit:
                 if buffer:
@@ -403,16 +430,21 @@ class SmartChunker:
                 chunks.extend(self._split_large_text_block(sec_text, sec_meta))
                 continue
 
-            if buffer_tokens > 0 and buffer_tokens + sec_tokens > self.chunk_tokens:
+            addition_tokens = sec_tokens if not buffer else separator_tokens + sec_tokens
+
+            if buffer_tokens > 0 and buffer_tokens + addition_tokens > self.chunk_tokens:
                 chunk_text = "\n\n".join(b[1]['text'] for b in buffer)
                 combined_meta = self._build_combined_meta(buffer)
                 chunks.append({"text": chunk_text, "meta": combined_meta, "block_type": "composite_section"})
 
-                buffer = self._build_text_overlap(buffer) if self.overlap_tokens > 0 else []
-                buffer_tokens = self.count_tokens("\n\n".join(b[1]['text'] for b in buffer)) if buffer else 0
+                buffer = (
+                    self._build_text_overlap(buffer, section_token_cache)
+                    if self.overlap_tokens > 0
+                    else []
+                )
+                buffer_tokens = calculate_buffer_tokens(buffer) if buffer else 0
 
-            addition_text = f"\n\n{sec_text}" if buffer else sec_text
-            buffer_tokens += self.count_tokens(addition_text)
+            buffer_tokens += addition_tokens
             buffer.append((idx, sec))
             
         if buffer:
