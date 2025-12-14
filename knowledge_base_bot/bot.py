@@ -1,10 +1,10 @@
 import logging
 import shelve
-import uuid # <-- ИСПРАВЛЕНИЕ ЗДЕСЬ
+import uuid
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Optional
+from typing import Optional
 
 import httpx
 from jose import jwt
